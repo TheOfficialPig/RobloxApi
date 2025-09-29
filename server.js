@@ -218,7 +218,7 @@ async function resolvePredictions() {
   saveActive(activePredictions);
 }
 
-// === BUILDER (20 max, priority order) ===
+// === BUILDER (limit, no filler weather) ===
 async function buildPredictions() {
   const newPredictions = [];
   const now = Date.now();
@@ -226,7 +226,23 @@ async function buildPredictions() {
   // --- SPORTS FIRST ---
   try {
     const nflEvents = await fetchNFLEvents();
-    newPredictions.push(...buildNFLPredictions(nflEvents).slice(0, 7)); // max 7
+    const nflPreds = buildNFLPredictions(nflEvents).slice(0, 7);
+    if (nflPreds.length > 0) {
+      newPredictions.push(...nflPreds);
+    } else {
+      newPredictions.push({
+        id: nextPredictionId++,
+        source: "sports",
+        Name: "No NFL games available right now",
+        Description: "Check back later when new games are scheduled.",
+        Answer1: "None",
+        Answer2: "None",
+        TimeHours: 24,
+        created: now,
+        expires: now + 24 * 60 * 60 * 1000,
+        meta: { league: "NFL" }
+      });
+    }
   } catch (err) {
     console.warn("NFL fetch failed:", err.message);
   }
@@ -234,39 +250,54 @@ async function buildPredictions() {
   // --- ROBLOX SECOND ---
   try {
     const movers = await fetchMovingLimiteds();
-    newPredictions.push(...buildRobloxPredictions(movers).slice(0, 7)); // max 7
+    const robloxPreds = buildRobloxPredictions(movers).slice(0, 7);
+    if (robloxPreds.length > 0) {
+      newPredictions.push(...robloxPreds);
+    } else {
+      newPredictions.push({
+        id: nextPredictionId++,
+        source: "roblox",
+        Name: "No Roblox item movements detected",
+        Description: "Check back later when more items are active.",
+        Answer1: "None",
+        Answer2: "None",
+        TimeHours: 12,
+        created: now,
+        expires: now + 12 * 60 * 60 * 1000,
+        meta: {}
+      });
+    }
   } catch (err) {
     console.warn("Roblox build failed:", err.message);
   }
 
-  // --- WEATHER LAST ---
-  const remainingSlots = 20 - newPredictions.length;
-  if (remainingSlots > 0) {
-    const weatherCities = (process.env.WEATHER_CITY || "Los Angeles,London,Tokyo")
-      .split(",")
-      .map((c) => c.trim());
+  // --- WEATHER (limit 5 unique, no repeats) ---
+  const weatherCities = (process.env.WEATHER_CITY || "Los Angeles,London,Tokyo")
+    .split(",")
+    .map((c) => c.trim());
 
-    const chosenCities = [];
-    for (let i = 0; i < remainingSlots; i++) {
-      const city = weatherCities[Math.floor(Math.random() * weatherCities.length)];
-      const data = await fetchWeather(city);
-      if (data) chosenCities.push({ city, data });
-    }
-    newPredictions.push(...buildWeatherPredictions(chosenCities).slice(0, remainingSlots));
+  const chosenCities = [];
+  const maxWeather = Math.min(weatherCities.length, 5);
+  for (let i = 0; i < maxWeather; i++) {
+    const city = weatherCities[i];
+    const data = await fetchWeather(city);
+    if (data) chosenCities.push({ city, data });
   }
 
-  // --- Attach IDs & Expiry ---
+  const weatherPreds = buildWeatherPredictions(chosenCities);
+  newPredictions.push(...weatherPreds);
+
+  // --- Attach IDs ---
   const fresh = newPredictions.map((p) => {
-    const prediction = {
-      id: nextPredictionId++,
-      ...p,
-      created: now,
-      expires: now + p.TimeHours * 60 * 60 * 1000
-    };
-    return prediction;
+    if (!p.id) {
+      p.id = nextPredictionId++;
+      p.created = now;
+      p.expires = now + p.TimeHours * 60 * 60 * 1000;
+    }
+    return p;
   });
 
-  activePredictions = [...activePredictions, ...fresh].slice(0, 20);
+  activePredictions = fresh;
   saveActive(activePredictions);
 }
 
