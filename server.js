@@ -39,7 +39,7 @@ async function buildPredictions() {
     try {
       const data = await fetchRobloxResale(assetId);
       // data contains minimum, maximum, recentAveragePrice, etc.
-      const recent = data.recentAveragePrice or data.averagePrice or data.lowestPrice or 0;
+      const recent = data.recentAveragePrice ?? data.averagePrice ?? data.lowestPrice ?? 0;
       // Create a prediction: will resale price exceed recent * 1.1 within 12 hours
       const target = Math.ceil((data.recentAveragePrice || data.averagePrice || 100) * 1.10);
       predictions.push({
