@@ -20,6 +20,10 @@ const SPORTS_API_KEY = process.env.SPORTS_API_KEY || "1";
 let activePredictions = loadActive();
 let resolvedPredictions = loadResolved(20);
 
+// === RAP HISTORY CACHE ===
+// { assetId: [ {time, rap} ] }
+let rapHistory = {};
+
 // === HELPERS ===
 
 // Weather
@@ -32,21 +36,66 @@ async function fetchWeather(city) {
   return await res.json();
 }
 
-// Roblox (updated to catalog.roblox.com)
+// Roblox asset fetch (resale + catalog info)
 async function fetchRobloxAsset(assetId) {
   try {
     const [resaleRes, assetRes] = await Promise.all([
       fetch(`https://economy.roblox.com/v1/assets/${assetId}/resale-data`),
       fetch(`https://catalog.roblox.com/v1/assets/${assetId}`)
     ]);
-    if (!resaleRes.ok || !assetRes.ok) throw new Error("Roblox fetch failed");
+    if (!resaleRes.ok || !assetRes.ok) return null;
+
     const resale = await resaleRes.json();
-    const assetData = await assetRes.json();
-    const info = assetData.data?.[0] || {};
+    const info = (await assetRes.json()).data?.[0] || {};
+    if (!resale || !info) return null;
+
+    // Track RAP history
+    const now = Date.now();
+    rapHistory[info.id] = rapHistory[info.id] || [];
+    rapHistory[info.id].push({ time: now, rap: resale.recentAveragePrice });
+    // Keep only 24h history
+    rapHistory[info.id] = rapHistory[info.id].filter(
+      (r) => now - r.time < 24 * 60 * 60 * 1000
+    );
+
     return { resale, info };
   } catch (err) {
     console.warn("Roblox fetch fail", assetId, err.message);
     return null;
+  }
+}
+
+// Check if RAP moved ≥ 5% in last 12h
+function hasBigMove(assetId) {
+  const history = rapHistory[assetId];
+  if (!history || history.length < 2) return false;
+
+  const now = Date.now();
+  const twelveHrsAgo = now - 12 * 60 * 60 * 1000;
+
+  const oldPoint = history.find((h) => h.time >= twelveHrsAgo);
+  const latest = history[history.length - 1];
+
+  if (!oldPoint || !latest || !oldPoint.rap || !latest.rap) return false;
+
+  const change = ((latest.rap - oldPoint.rap) / oldPoint.rap) * 100;
+  return Math.abs(change) >= 5;
+}
+
+// Fetch Roblox Limiteds from catalog, then filter movers
+async function fetchMovingLimiteds(limit = 30) {
+  try {
+    const searchUrl = `https://catalog.roblox.com/v1/search/items/details?Category=3&Subcategory=2&limit=${limit}`;
+    const searchRes = await fetch(searchUrl);
+    if (!searchRes.ok) throw new Error(`Catalog search failed: ${searchRes.status}`);
+
+    const items = (await searchRes.json()).data || [];
+    const assets = await Promise.all(items.map((it) => fetchRobloxAsset(it.id)));
+
+    return assets.filter((a) => a && hasBigMove(a.info.id));
+  } catch (err) {
+    console.warn("fetchMovingLimiteds error:", err.message);
+    return [];
   }
 }
 
@@ -64,19 +113,6 @@ async function fetchSportsResult(eventId) {
   if (!res.ok) return null;
   const data = await res.json();
   return data.events ? data.events[0] : null;
-}
-
-// === DUPLICATE CHECKER ===
-const usedQuestions = new Set();
-function uniquePredictions(predictions) {
-  const unique = [];
-  for (const p of predictions) {
-    if (!usedQuestions.has(p.Name)) {
-      usedQuestions.add(p.Name);
-      unique.push(p);
-    }
-  }
-  return unique;
 }
 
 // === PREDICTION BUILDERS ===
@@ -140,7 +176,6 @@ function buildRobloxPredictions(assets) {
   ];
 
   for (const asset of assets) {
-    if (!asset) continue;
     const choice = templates[Math.floor(Math.random() * templates.length)];
     predictions.push(choice(asset));
   }
@@ -237,10 +272,8 @@ async function resolvePredictions() {
 
       if (p.source === "roblox") {
         const asset = await fetchRobloxAsset(p.meta.assetId);
-        if (asset) {
-          const recent = asset.resale.recentAveragePrice ?? 0;
-          result = recent >= p.meta.target ? "Yes" : "No";
-        }
+        const recent = asset.resale.recentAveragePrice ?? 0;
+        result = recent >= p.meta.target ? "Yes" : "No";
       }
 
       if (p.source === "sports") {
@@ -275,7 +308,7 @@ async function resolvePredictions() {
 
 // === BUILDER ===
 async function buildPredictions() {
-  let predictions = [];
+  const predictions = [];
 
   // Weather
   const weatherCities = (process.env.WEATHER_CITY || "Los Angeles,London,Tokyo")
@@ -289,14 +322,13 @@ async function buildPredictions() {
   }
   predictions.push(...buildWeatherPredictions(chosenCities));
 
-  // Roblox
-  const assetIds = (process.env.ASSET_IDS || "12345678").split(",");
-  const assetData = [];
-  for (const id of assetIds) {
-    const a = await fetchRobloxAsset(id.trim());
-    if (a) assetData.push(a);
+  // Roblox movers
+  try {
+    const movers = await fetchMovingLimiteds(50); // fetch 50, filter movers
+    predictions.push(...buildRobloxPredictions(movers));
+  } catch (err) {
+    console.warn("Roblox movers fetch failed:", err.message);
   }
-  predictions.push(...buildRobloxPredictions(assetData));
 
   // NFL
   try {
@@ -313,9 +345,6 @@ async function buildPredictions() {
   } catch (err) {
     console.warn("F1 fetch failed:", err.message);
   }
-
-  // Deduplicate
-  predictions = uniquePredictions(predictions);
 
   // Attach expiry
   const now = Date.now();
