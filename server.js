@@ -4,18 +4,25 @@ import fetch from "node-fetch";
 import dotenv from "dotenv";
 dotenv.config();
 
+import {
+  saveActive,
+  loadActive,
+  saveResolved,
+  loadResolved
+} from "./db.js";
+
 const app = express();
 const PORT = process.env.PORT || 3000;
 
 const OPENWEATHER_KEY = process.env.OPENWEATHER_KEY;
 const SPORTS_API_KEY = process.env.SPORTS_API_KEY || "1";
 
-let activePredictions = [];
-let resolvedPredictions = [];
+let activePredictions = loadActive();
+let resolvedPredictions = loadResolved(20);
 
 // === HELPERS ===
 
-// --- Weather ---
+// Weather
 async function fetchWeather(city) {
   const url = `https://api.openweathermap.org/data/2.5/weather?q=${encodeURIComponent(
     city
@@ -25,7 +32,7 @@ async function fetchWeather(city) {
   return await res.json();
 }
 
-// --- Roblox ---
+// Roblox
 async function fetchRobloxAsset(assetId) {
   const [resaleRes, assetRes] = await Promise.all([
     fetch(`https://economy.roblox.com/v1/assets/${assetId}/resale-data`),
@@ -37,7 +44,7 @@ async function fetchRobloxAsset(assetId) {
   return { resale, info };
 }
 
-// --- Sports ---
+// Sports
 async function fetchSportsEvents(leagueId) {
   const url = `https://www.thesportsdb.com/api/v1/json/${SPORTS_API_KEY}/eventsnextleague.php?id=${leagueId}`;
   const res = await fetch(url);
@@ -54,8 +61,7 @@ async function fetchSportsResult(eventId) {
 }
 
 // === PREDICTION BUILDERS ===
-
-// --- Weather ---
+// Weather
 function buildWeatherPredictions(weatherCities) {
   const predictions = [];
   const templates = [
@@ -81,13 +87,13 @@ function buildWeatherPredictions(weatherCities) {
 
   for (const city of weatherCities) {
     const choice = templates[Math.floor(Math.random() * templates.length)];
-    predictions.push(choice(city, city.data));
+    predictions.push(choice(city.city, city.data));
   }
 
   return predictions.slice(0, 5);
 }
 
-// --- Roblox ---
+// Roblox
 function buildRobloxPredictions(assets) {
   const predictions = [];
   const templates = [
@@ -122,7 +128,7 @@ function buildRobloxPredictions(assets) {
   return predictions.slice(0, 5);
 }
 
-// --- Sports (NFL + F1 separately) ---
+// NFL
 function buildNFLPredictions(events) {
   const predictions = [];
   const templates = [
@@ -154,6 +160,7 @@ function buildNFLPredictions(events) {
   return predictions;
 }
 
+// F1
 function buildF1Predictions(events) {
   const predictions = [];
   const templates = [
@@ -204,7 +211,8 @@ async function resolvePredictions() {
           /rain|shower/i.test(w.main || w.description || "")
         );
         if (p.Name.includes("rain")) result = raining ? "Yes" : "No";
-        else if (p.Name.includes("drop below")) result = weather.main.temp < 10 ? "Yes" : "No";
+        else if (p.Name.includes("drop below"))
+          result = weather.main.temp < 10 ? "Yes" : "No";
       }
 
       if (p.source === "roblox") {
@@ -236,13 +244,14 @@ async function resolvePredictions() {
       console.warn("Resolve error:", err.message);
     }
 
-    resolvedPredictions.push({ ...p, result });
+    saveResolved({ ...p, result });
   }
 
   activePredictions = stillActive;
+  saveActive(activePredictions);
 }
 
-// === BUILDER (runs every 5m) ===
+// === BUILDER ===
 async function buildPredictions() {
   const predictions = [];
 
@@ -271,50 +280,48 @@ async function buildPredictions() {
   }
   predictions.push(...buildRobloxPredictions(assetData));
 
-  // Sports (NFL + F1)
+  // NFL
   try {
-    const nflEvents = await fetchSportsEvents("4391"); // NFL league
+    const nflEvents = await fetchSportsEvents("4391");
     predictions.push(...buildNFLPredictions(nflEvents));
   } catch (err) {
     console.warn("NFL fetch failed:", err.message);
   }
 
+  // F1
   try {
-    const f1Events = await fetchSportsEvents("4370"); // F1 league
+    const f1Events = await fetchSportsEvents("4370");
     predictions.push(...buildF1Predictions(f1Events));
   } catch (err) {
     console.warn("F1 fetch failed:", err.message);
   }
 
-  // Attach expiry timestamps
+  // Attach expiry
   const now = Date.now();
   activePredictions = predictions.map((p) => ({
     ...p,
     created: now,
     expires: now + p.TimeHours * 60 * 60 * 1000
   }));
+  saveActive(activePredictions);
 }
 
-// Refresh predictions every 5 min
-setInterval(async () => {
+// === REFRESH LOOP ===
+async function refreshPredictions() {
   await resolvePredictions();
   await buildPredictions();
-}, 5 * 60 * 1000);
+}
 
-// First build on startup
+setInterval(refreshPredictions, 5 * 60 * 1000);
 await buildPredictions();
 
 // === ROUTES ===
-app.get("/predictions", async (req, res) => {
-  try {
-    res.json({
-      ok: true,
-      active: activePredictions.slice(0, 15), // 5 per category
-      resolved: resolvedPredictions.slice(-20) // last 20 resolved
-    });
-  } catch (err) {
-    res.status(500).json({ ok: false, error: err.message });
-  }
+app.get("/predictions", (req, res) => {
+  res.json({
+    ok: true,
+    active: loadActive().slice(0, 15),
+    resolved: loadResolved(20)
+  });
 });
 
 app.listen(PORT, () => {
