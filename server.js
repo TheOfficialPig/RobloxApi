@@ -17,6 +17,10 @@ const PORT = process.env.PORT || 3000;
 const OPENWEATHER_KEY = process.env.OPENWEATHER_KEY;
 const SPORTSDATA_API_KEY = process.env.SPORTSDATA_API_KEY;
 
+// ✅ NEW ENV VARS for NFL
+const NFL_SEASON = process.env.NFL_SEASON || "2025REG"; // example: 2025REG, 2024POST
+const NFL_WEEK = parseInt(process.env.NFL_WEEK || "1"); // defaults to 1
+
 let activePredictions = loadActive();
 let resolvedPredictions = loadResolved(20);
 
@@ -78,14 +82,14 @@ async function fetchMovingLimiteds() {
 
 // Sports (NFL from Sportsdata.io)
 async function fetchNFLEvents() {
-  const url = `https://api.sportsdata.io/v3/nfl/scores/json/Schedule/2025REG?key=${SPORTSDATA_API_KEY}`;
+  const url = `https://api.sportsdata.io/v3/nfl/scores/json/Schedule/${NFL_SEASON}?key=${SPORTSDATA_API_KEY}`;
   const res = await fetch(url);
   if (!res.ok) throw new Error("Sportsdata NFL fetch failed");
   return await res.json();
 }
 
 async function fetchNFLGameResult(gameId) {
-  const url = `https://api.sportsdata.io/v3/nfl/scores/json/ScoresByWeek/2025REG/4?key=${SPORTSDATA_API_KEY}`;
+  const url = `https://api.sportsdata.io/v3/nfl/scores/json/ScoresByWeek/${NFL_SEASON}/${NFL_WEEK}?key=${SPORTSDATA_API_KEY}`;
   const res = await fetch(url);
   if (!res.ok) return null;
   const games = await res.json();
@@ -294,4 +298,5 @@ app.get("/predictions", (req, res) => {
 
 app.listen(PORT, () => {
   console.log(`Prediction server running on port ${PORT}`);
+  console.log(`📅 NFL Season: ${NFL_SEASON}, Week: ${NFL_WEEK}`);
 });
