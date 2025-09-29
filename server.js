@@ -7,13 +7,15 @@ dotenv.config();
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-const SPORTS_API_KEY = process.env.SPORTS_API_KEY || "1"; // SportsDB demo key
+const SPORTS_API_KEY = process.env.SPORTS_API_KEY || "1";
 const OPENWEATHER_KEY = process.env.OPENWEATHER_KEY;
 const ASSET_IDS = process.env.ASSET_IDS ? process.env.ASSET_IDS.split(",") : ["125013769"];
 
-// === HELPERS ===
+// =============== STATE STORAGE ===============
+let activePredictions = []; // live predictions waiting for resolution
+let resolvedPredictions = []; // finished with results
 
-// Roblox resale + name
+// =============== HELPERS (same as before) ===============
 async function fetchRobloxAsset(assetId) {
   const [resale, details] = await Promise.all([
     fetch(`https://economy.roblox.com/v1/assets/${assetId}/resale-data`).then(r => r.json()),
@@ -22,7 +24,6 @@ async function fetchRobloxAsset(assetId) {
   return { resale, name: details.Name || `Asset ${assetId}` };
 }
 
-// Weather (single city)
 async function fetchWeather(city) {
   const url = `https://api.openweathermap.org/data/2.5/weather?q=${encodeURIComponent(
     city
@@ -32,7 +33,6 @@ async function fetchWeather(city) {
   return await res.json();
 }
 
-// Sports events
 async function fetchSportsEvents(leagueId) {
   const url = `https://www.thesportsdb.com/api/v1/json/${SPORTS_API_KEY}/eventsnextleague.php?id=${leagueId}`;
   const res = await fetch(url);
@@ -40,130 +40,6 @@ async function fetchSportsEvents(leagueId) {
   return (await res.json()).events || [];
 }
 
-// === PREDICTION TEMPLATES ===
-
-function buildRobloxPredictions(assets) {
-  const templates = [
-    (a, recent) => ({
-      source: "roblox",
-      Name: `Will ${a.name} exceed ${Math.ceil(recent * 1.1)} R$ in 12 hours?`,
-      Description: `Current average: ${recent} R$.`,
-      Answer1: "Yes",
-      Answer2: "No",
-      TimeHours: 12
-    }),
-    (a, recent) => ({
-      source: "roblox",
-      Name: `Will ${a.name} drop below ${Math.floor(recent * 0.9)} R$ today?`,
-      Description: `Recent average: ${recent} R$.`,
-      Answer1: "Yes",
-      Answer2: "No",
-      TimeHours: 24
-    }),
-    (a, recent) => ({
-      source: "roblox",
-      Name: `Will ${a.name}'s price stay between ${Math.floor(recent * 0.95)} and ${Math.ceil(recent * 1.05)} R$?`,
-      Description: `Stable range prediction.`,
-      Answer1: "Yes",
-      Answer2: "No",
-      TimeHours: 24
-    })
-  ];
-
-  const preds = [];
-  for (const a of assets) {
-    const recent = a.resale.recentAveragePrice ?? a.resale.averagePrice ?? 100;
-    const randomTemplate = templates[Math.floor(Math.random() * templates.length)];
-    preds.push(randomTemplate(a, recent));
-  }
-  return preds;
-}
-
-function buildWeatherPredictions(weather, city) {
-  const templates = [
-    (w) => ({
-      source: "weather",
-      Name: `Will it rain in ${city} in the next 24 hours?`,
-      Description: `Current: ${w.weather[0].description}, ${Math.round(w.main.temp)}°C.`,
-      Answer1: "Yes",
-      Answer2: "No",
-      TimeHours: 24
-    }),
-    (w) => ({
-      source: "weather",
-      Name: `Will the temperature in ${city} exceed ${Math.round(w.main.temp + 3)}°C today?`,
-      Description: `Now: ${Math.round(w.main.temp)}°C.`,
-      Answer1: "Yes",
-      Answer2: "No",
-      TimeHours: 24
-    }),
-    (w) => ({
-      source: "weather",
-      Name: `Will the temperature in ${city} drop below ${Math.round(w.main.temp - 3)}°C today?`,
-      Description: `Now: ${Math.round(w.main.temp)}°C.`,
-      Answer1: "Yes",
-      Answer2: "No",
-      TimeHours: 24
-    })
-  ];
-  return [templates[Math.floor(Math.random() * templates.length)](weather)];
-}
-
-function buildSportsPredictions(events, type = "football") {
-  const templates = {
-    football: [
-      (ev) => ({
-        source: "sports",
-        Name: `Will ${ev.strHomeTeam} beat ${ev.strAwayTeam}?`,
-        Description: `${ev.strHomeTeam} vs ${ev.strAwayTeam}, ${ev.dateEvent}.`,
-        Answer1: ev.strHomeTeam,
-        Answer2: ev.strAwayTeam,
-        TimeHours: 48
-      }),
-      (ev) => ({
-        source: "sports",
-        Name: `Will ${ev.strHomeTeam} vs ${ev.strAwayTeam} go over 45 total points?`,
-        Description: `Game date: ${ev.dateEvent}.`,
-        Answer1: "Yes",
-        Answer2: "No",
-        TimeHours: 48
-      }),
-      (ev) => ({
-        source: "sports",
-        Name: `Will ${ev.strHomeTeam} vs ${ev.strAwayTeam} end in a 1-score game?`,
-        Description: `Match date: ${ev.dateEvent}.`,
-        Answer1: "Yes",
-        Answer2: "No",
-        TimeHours: 48
-      })
-    ],
-    f1: [
-      (ev) => ({
-        source: "sports",
-        Name: `Will ${ev.strEvent} be won by a Ferrari driver?`,
-        Description: `Upcoming F1 race on ${ev.dateEvent}.`,
-        Answer1: "Yes",
-        Answer2: "No",
-        TimeHours: 72
-      }),
-      (ev) => ({
-        source: "sports",
-        Name: `Will there be a safety car in ${ev.strEvent}?`,
-        Description: `Scheduled: ${ev.dateEvent}.`,
-        Answer1: "Yes",
-        Answer2: "No",
-        TimeHours: 72
-      })
-    ]
-  };
-
-  return events.slice(0, 5).map(ev => {
-    const t = templates[type][Math.floor(Math.random() * templates[type].length)];
-    return t(ev);
-  });
-}
-
-// Shuffle array helper
 function shuffle(arr) {
   for (let i = arr.length - 1; i > 0; i--) {
     const j = Math.floor(Math.random() * (i + 1));
@@ -172,25 +48,50 @@ function shuffle(arr) {
   return arr;
 }
 
-// === MAIN BUILDER ===
+// =============== BUILD NEW PREDICTIONS ===============
 async function buildPredictions() {
   let predictions = [];
 
   // Roblox
   try {
     const assets = await Promise.all(ASSET_IDS.map(id => fetchRobloxAsset(id)));
-    predictions.push(...buildRobloxPredictions(assets).slice(0, 5));
+    for (const a of assets) {
+      const recent = a.resale.recentAveragePrice ?? a.resale.averagePrice ?? 100;
+      const target = Math.ceil(recent * 1.1);
+      predictions.push({
+        source: "roblox",
+        Name: `Will ${a.name} exceed ${target} R$ in 12 hours?`,
+        Answer1: "Yes",
+        Answer2: "No",
+        created: Date.now(),
+        expires: Date.now() + 12 * 60 * 60 * 1000,
+        meta: { assetId: a.id, target, recent }
+      });
+    }
   } catch (err) {
     console.warn("Roblox fetch failed:", err.message);
   }
 
-  // Weather (random city)
+  // Weather
   if (OPENWEATHER_KEY) {
     const cities = (process.env.WEATHER_CITY || "London").split(",");
     const city = cities[Math.floor(Math.random() * cities.length)].trim();
     try {
       const weather = await fetchWeather(city);
-      if (weather) predictions.push(...buildWeatherPredictions(weather, city));
+      if (weather) {
+        const willRain = (weather.weather || []).some(w =>
+          /rain|shower/i.test(w.main || w.description || "")
+        );
+        predictions.push({
+          source: "weather",
+          Name: `Will it rain in ${city} in the next 6 hours?`,
+          Answer1: "Yes",
+          Answer2: "No",
+          created: Date.now(),
+          expires: Date.now() + 6 * 60 * 60 * 1000,
+          meta: { city, willRainNow: willRain }
+        });
+      }
     } catch (err) {
       console.warn("Weather fetch failed:", err.message);
     }
@@ -200,28 +101,85 @@ async function buildPredictions() {
   try {
     const nfl = await fetchSportsEvents("4391"); // NFL
     const f1 = await fetchSportsEvents("4370"); // F1
-    predictions.push(...buildSportsPredictions(nfl, "football").slice(0, 5));
-    predictions.push(...buildSportsPredictions(f1, "f1").slice(0, 5));
+    for (const ev of nfl.slice(0, 3)) {
+      predictions.push({
+        source: "sports",
+        Name: `Will ${ev.strHomeTeam} beat ${ev.strAwayTeam}?`,
+        Answer1: ev.strHomeTeam,
+        Answer2: ev.strAwayTeam,
+        created: Date.now(),
+        expires: Date.now() + 48 * 60 * 60 * 1000,
+        meta: { eventId: ev.idEvent }
+      });
+    }
+    for (const ev of f1.slice(0, 2)) {
+      predictions.push({
+        source: "sports",
+        Name: `Will there be a safety car in ${ev.strEvent}?`,
+        Answer1: "Yes",
+        Answer2: "No",
+        created: Date.now(),
+        expires: Date.now() + 72 * 60 * 60 * 1000,
+        meta: { eventId: ev.idEvent }
+      });
+    }
   } catch (err) {
     console.warn("Sports fetch failed:", err.message);
   }
 
-  // Shuffle and limit: 5 from each type
-  const roblox = predictions.filter(p => p.source === "roblox").slice(0, 5);
-  const weather = predictions.filter(p => p.source === "weather").slice(0, 5);
-  const sports = predictions.filter(p => p.source === "sports").slice(0, 5);
-
-  return shuffle([...roblox, ...weather, ...sports]);
+  return shuffle(predictions).slice(0, 15); // max 15 (5 per category idea)
 }
 
-// === ROUTE ===
-app.get("/predictions", async (req, res) => {
-  try {
-    const preds = await buildPredictions();
-    res.json({ ok: true, predictions: preds });
-  } catch (err) {
-    res.status(500).json({ ok: false, error: err.message });
+// =============== RESOLVE EXPIRED PREDICTIONS ===============
+async function resolvePredictions() {
+  const now = Date.now();
+  const stillActive = [];
+  for (const p of activePredictions) {
+    if (now < p.expires) {
+      stillActive.push(p);
+    } else {
+      // expired → resolve using latest API data
+      let result = "No Result";
+      try {
+        if (p.source === "weather") {
+          const weather = await fetchWeather(p.meta.city);
+          const raining = (weather.weather || []).some(w =>
+            /rain|shower/i.test(w.main || w.description || "")
+          );
+          result = raining ? "Yes" : "No";
+        }
+        if (p.source === "roblox") {
+          const asset = await fetchRobloxAsset(p.meta.assetId);
+          const recent = asset.resale.recentAveragePrice ?? 0;
+          result = recent >= p.meta.target ? "Yes" : "No";
+        }
+        if (p.source === "sports") {
+          // sports results would require results API
+          // stub here → mark unresolved
+          result = "Pending sports result";
+        }
+      } catch (err) {
+        console.warn("Resolve error", err.message);
+      }
+      resolvedPredictions.push({ ...p, result });
+    }
   }
+  activePredictions = stillActive;
+}
+
+// =============== BACKGROUND JOB ===============
+// Every 5 minutes → refresh predictions + resolve old ones
+setInterval(async () => {
+  await resolvePredictions();
+  if (activePredictions.length < 15) {
+    const newPreds = await buildPredictions();
+    activePredictions.push(...newPreds);
+  }
+}, 5 * 60 * 1000);
+
+// =============== ROUTES ===============
+app.get("/predictions", (req, res) => {
+  res.json({ ok: true, active: activePredictions, resolved: resolvedPredictions });
 });
 
 app.listen(PORT, () => {
