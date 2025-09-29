@@ -178,21 +178,18 @@ async function resolvePredictions() {
     try {
       if (p.source === "weather") {
         const weather = await fetchWeather(p.meta.city);
-        const raining = (weather.weather || []).some((w) =>
-          /rain|shower/i.test(w.main || w.description || "")
-        );
-        if (p.Name.includes("rain")) result = raining ? "Yes" : "No";
-        else if (p.Name.includes("drop below"))
-          result = weather.main.temp < 10 ? "Yes" : "No";
+        if (weather && weather.main) {
+          const currentF = (weather.main.temp * 9) / 5 + 32;
+          result = currentF > p.meta.target ? "Over" : "Under";
+        }
       }
 
       if (p.source === "roblox") {
-        // Simple re-check against target
-        const asset = await fetchMovingLimiteds();
-        const match = asset.find((a) => a.assetId === p.meta.assetId);
+        const movers = await fetchMovingLimiteds();
+        const match = movers.find((a) => a.assetId === p.meta.assetId);
         if (match) {
           const recent = match.recentAveragePrice ?? 0;
-          result = recent >= p.meta.target ? "Yes" : "No";
+          result = recent > p.meta.target ? "Over" : "Under";
         }
       }
 
@@ -202,13 +199,8 @@ async function resolvePredictions() {
           const home = parseInt(ev.HomeScore);
           const away = parseInt(ev.AwayScore);
           if (!isNaN(home) && !isNaN(away)) {
-            if (p.meta.market === "O/U 40") {
-              result = home + away > 40 ? "Yes" : "No";
-            } else {
-              if (home > away) result = ev.HomeTeam;
-              else if (away > home) result = ev.AwayTeam;
-              else result = "Draw";
-            }
+            const total = home + away;
+            result = total > p.meta.line ? "Over" : "Under";
           }
         }
       }
