@@ -32,16 +32,22 @@ async function fetchWeather(city) {
   return await res.json();
 }
 
-// Roblox
+// Roblox (updated to catalog.roblox.com)
 async function fetchRobloxAsset(assetId) {
-  const [resaleRes, assetRes] = await Promise.all([
-    fetch(`https://economy.roblox.com/v1/assets/${assetId}/resale-data`),
-    fetch(`https://api.roblox.com/marketplace/productinfo?assetId=${assetId}`)
-  ]);
-  if (!resaleRes.ok || !assetRes.ok) throw new Error("Roblox fetch failed");
-  const resale = await resaleRes.json();
-  const info = await assetRes.json();
-  return { resale, info };
+  try {
+    const [resaleRes, assetRes] = await Promise.all([
+      fetch(`https://economy.roblox.com/v1/assets/${assetId}/resale-data`),
+      fetch(`https://catalog.roblox.com/v1/assets/${assetId}`)
+    ]);
+    if (!resaleRes.ok || !assetRes.ok) throw new Error("Roblox fetch failed");
+    const resale = await resaleRes.json();
+    const assetData = await assetRes.json();
+    const info = assetData.data?.[0] || {};
+    return { resale, info };
+  } catch (err) {
+    console.warn("Roblox fetch fail", assetId, err.message);
+    return null;
+  }
 }
 
 // Sports
@@ -58,6 +64,19 @@ async function fetchSportsResult(eventId) {
   if (!res.ok) return null;
   const data = await res.json();
   return data.events ? data.events[0] : null;
+}
+
+// === DUPLICATE CHECKER ===
+const usedQuestions = new Set();
+function uniquePredictions(predictions) {
+  const unique = [];
+  for (const p of predictions) {
+    if (!usedQuestions.has(p.Name)) {
+      usedQuestions.add(p.Name);
+      unique.push(p);
+    }
+  }
+  return unique;
 }
 
 // === PREDICTION BUILDERS ===
@@ -101,26 +120,27 @@ function buildRobloxPredictions(assets) {
       const target = Math.ceil((a.resale.recentAveragePrice || 100) * 1.1);
       return {
         source: "roblox",
-        Name: `Will ${a.info.Name} exceed ${target} R$ in 12 hours?`,
+        Name: `Will ${a.info.name} exceed ${target} R$ in 12 hours?`,
         Description: `Current average: ${a.resale.recentAveragePrice} R$.`,
         Answer1: "Yes",
         Answer2: "No",
         TimeHours: 12,
-        meta: { target, assetId: a.info.AssetId }
+        meta: { target, assetId: a.info.id }
       };
     },
     (a) => ({
       source: "roblox",
-      Name: `Will ${a.info.Name}'s price drop below ${a.resale.lowestPrice} R$ soon?`,
+      Name: `Will ${a.info.name}'s price drop below ${a.resale.lowestPrice} R$ soon?`,
       Description: `Lowest current: ${a.resale.lowestPrice} R$.`,
       Answer1: "Yes",
       Answer2: "No",
       TimeHours: 12,
-      meta: { target: a.resale.lowestPrice, assetId: a.info.AssetId }
+      meta: { target: a.resale.lowestPrice, assetId: a.info.id }
     })
   ];
 
   for (const asset of assets) {
+    if (!asset) continue;
     const choice = templates[Math.floor(Math.random() * templates.length)];
     predictions.push(choice(asset));
   }
@@ -217,8 +237,10 @@ async function resolvePredictions() {
 
       if (p.source === "roblox") {
         const asset = await fetchRobloxAsset(p.meta.assetId);
-        const recent = asset.resale.recentAveragePrice ?? 0;
-        result = recent >= p.meta.target ? "Yes" : "No";
+        if (asset) {
+          const recent = asset.resale.recentAveragePrice ?? 0;
+          result = recent >= p.meta.target ? "Yes" : "No";
+        }
       }
 
       if (p.source === "sports") {
@@ -253,7 +275,7 @@ async function resolvePredictions() {
 
 // === BUILDER ===
 async function buildPredictions() {
-  const predictions = [];
+  let predictions = [];
 
   // Weather
   const weatherCities = (process.env.WEATHER_CITY || "Los Angeles,London,Tokyo")
@@ -271,12 +293,8 @@ async function buildPredictions() {
   const assetIds = (process.env.ASSET_IDS || "12345678").split(",");
   const assetData = [];
   for (const id of assetIds) {
-    try {
-      const a = await fetchRobloxAsset(id.trim());
-      assetData.push(a);
-    } catch (err) {
-      console.warn("Roblox fetch fail", id, err.message);
-    }
+    const a = await fetchRobloxAsset(id.trim());
+    if (a) assetData.push(a);
   }
   predictions.push(...buildRobloxPredictions(assetData));
 
@@ -295,6 +313,9 @@ async function buildPredictions() {
   } catch (err) {
     console.warn("F1 fetch failed:", err.message);
   }
+
+  // Deduplicate
+  predictions = uniquePredictions(predictions);
 
   // Attach expiry
   const now = Date.now();
