@@ -20,6 +20,11 @@ const SPORTSDATA_API_KEY = process.env.SPORTSDATA_API_KEY;
 let activePredictions = loadActive();
 let resolvedPredictions = loadResolved(20);
 
+// global counter for unique IDs
+let nextPredictionId = (activePredictions.length > 0)
+  ? Math.max(...activePredictions.map(p => p.id || 0)) + 1
+  : 1;
+
 // === HELPERS ===
 
 // Weather
@@ -32,7 +37,7 @@ async function fetchWeather(city) {
   return await res.json();
 }
 
-// === ROBLOX (via Rolimons) ===
+// Roblox (via Rolimons)
 async function fetchMovingLimiteds() {
   try {
     const url = "https://api.rolimons.com/items/v1/itemdetails";
@@ -41,20 +46,11 @@ async function fetchMovingLimiteds() {
 
     const data = await res.json();
     const items = data.items || {};
-
     const now = Date.now();
 
     const moving = Object.entries(items)
       .map(([id, details]) => {
-        const [
-          name, // 0
-          recentAveragePrice, // 1
-          originalPrice, // 2
-          demand, // 3
-          rarity, // 4
-          projected // 5
-        ] = details;
-
+        const [name, recentAveragePrice, originalPrice, demand, rarity, projected] = details;
         return {
           assetId: id,
           name,
@@ -67,7 +63,7 @@ async function fetchMovingLimiteds() {
       })
       .filter((item) => item.recentAveragePrice > 0);
 
-    // TEMP: simulate % movement (replace with real cache later)
+    // simulate % movement (replace with cache later)
     const movers = moving.filter((item) => {
       const changePercent = Math.random() * 20 - 10; // fake +/-10%
       return Math.abs(changePercent) >= 5;
@@ -98,7 +94,7 @@ async function fetchNFLGameResult(gameId) {
 
 // === PREDICTION BUILDERS ===
 
-// === WEATHER PREDICTIONS ===
+// Weather
 function buildWeatherPredictions(weatherCities) {
   const predictions = [];
 
@@ -117,16 +113,19 @@ function buildWeatherPredictions(weatherCities) {
     });
   }
 
-  return predictions.slice(0, 5);
+  return predictions;
 }
 
-// === ROBLOX PREDICTIONS ===
+// Roblox
 function buildRobloxPredictions(assets) {
   const predictions = [];
 
   for (const a of assets) {
     const current = a.recentAveragePrice;
-    const target = current + (Math.random() < 0.5 ? -Math.floor(current * 0.1) : Math.floor(current * 0.1));
+    const target =
+      current + (Math.random() < 0.5
+        ? -Math.floor(current * 0.1)
+        : Math.floor(current * 0.1));
 
     predictions.push({
       source: "roblox",
@@ -139,15 +138,15 @@ function buildRobloxPredictions(assets) {
     });
   }
 
-  return predictions.slice(0, 5);
+  return predictions;
 }
 
-// === NFL PREDICTIONS ===
+// NFL
 function buildNFLPredictions(events) {
   const predictions = [];
 
-  for (const ev of events.slice(0, 5)) {
-    const line = 35 + Math.floor(Math.random() * 15); // random O/U line between 35–50
+  for (const ev of events) {
+    const line = 35 + Math.floor(Math.random() * 15); // 35–50 O/U line
 
     predictions.push({
       source: "sports",
@@ -156,7 +155,7 @@ function buildNFLPredictions(events) {
       Answer1: `Over ${line}`,
       Answer2: `Under ${line}`,
       TimeHours: 48,
-      meta: { eventId: ev.GameKey, market: `O/U ${line}`, league: "NFL", line }
+      meta: { eventId: ev.GameKey, league: "NFL", line }
     });
   }
 
@@ -215,53 +214,70 @@ async function resolvePredictions() {
   saveActive(activePredictions);
 }
 
-// === BUILDER ===
+// === BUILDER (20 max, priority order) ===
 async function buildPredictions() {
-  const predictions = [];
+  const newPredictions = [];
+  const now = Date.now();
 
-  // Weather
-  const weatherCities = (process.env.WEATHER_CITY || "Los Angeles,London,Tokyo")
-    .split(",")
-    .map((c) => c.trim());
-  const chosenCities = [];
-  for (let i = 0; i < 5; i++) {
-    const city = weatherCities[Math.floor(Math.random() * weatherCities.length)];
-    const data = await fetchWeather(city);
-    if (data) chosenCities.push({ city, data });
-  }
-  predictions.push(...buildWeatherPredictions(chosenCities));
-
-  // Roblox
-  try {
-    const movers = await fetchMovingLimiteds();
-    predictions.push(...buildRobloxPredictions(movers));
-  } catch (err) {
-    console.warn("Roblox build failed:", err.message);
-  }
-
-  // NFL
+  // --- SPORTS FIRST ---
   try {
     const nflEvents = await fetchNFLEvents();
-    predictions.push(...buildNFLPredictions(nflEvents));
+    newPredictions.push(...buildNFLPredictions(nflEvents).slice(0, 7)); // max 7
   } catch (err) {
     console.warn("NFL fetch failed:", err.message);
   }
 
-  // Attach expiry
-  const now = Date.now();
-  activePredictions = predictions.map((p, i) => ({
-    id: i + 1,
-    ...p,
-    created: now,
-    expires: now + p.TimeHours * 60 * 60 * 1000
-  }));
+  // --- ROBLOX SECOND ---
+  try {
+    const movers = await fetchMovingLimiteds();
+    newPredictions.push(...buildRobloxPredictions(movers).slice(0, 7)); // max 7
+  } catch (err) {
+    console.warn("Roblox build failed:", err.message);
+  }
+
+  // --- WEATHER LAST ---
+  const remainingSlots = 20 - newPredictions.length;
+  if (remainingSlots > 0) {
+    const weatherCities = (process.env.WEATHER_CITY || "Los Angeles,London,Tokyo")
+      .split(",")
+      .map((c) => c.trim());
+
+    const chosenCities = [];
+    for (let i = 0; i < remainingSlots; i++) {
+      const city = weatherCities[Math.floor(Math.random() * weatherCities.length)];
+      const data = await fetchWeather(city);
+      if (data) chosenCities.push({ city, data });
+    }
+    newPredictions.push(...buildWeatherPredictions(chosenCities).slice(0, remainingSlots));
+  }
+
+  // --- Attach IDs & Expiry ---
+  const fresh = newPredictions.map((p) => {
+    const prediction = {
+      id: nextPredictionId++,
+      ...p,
+      created: now,
+      expires: now + p.TimeHours * 60 * 60 * 1000
+    };
+    return prediction;
+  });
+
+  activePredictions = [...activePredictions, ...fresh].slice(0, 20);
   saveActive(activePredictions);
 }
 
 // === REFRESH LOOP ===
 async function refreshPredictions() {
   await resolvePredictions();
-  await buildPredictions();
+
+  // filter expired
+  const now = Date.now();
+  activePredictions = activePredictions.filter((p) => p.expires > now);
+
+  // refill back to 20 if needed
+  if (activePredictions.length < 20) {
+    await buildPredictions();
+  }
 }
 
 setInterval(refreshPredictions, 5 * 60 * 1000);
@@ -271,7 +287,7 @@ await buildPredictions();
 app.get("/predictions", (req, res) => {
   res.json({
     ok: true,
-    active: loadActive().slice(0, 15),
+    active: loadActive().slice(0, 20),
     resolved: loadResolved(20)
   });
 });
