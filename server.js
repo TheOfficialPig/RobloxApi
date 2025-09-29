@@ -7,34 +7,23 @@ dotenv.config();
 const app = express();
 const PORT = process.env.PORT || 3000;
 
+const SPORTS_API_KEY = process.env.SPORTS_API_KEY || "1"; // SportsDB demo key
 const OPENWEATHER_KEY = process.env.OPENWEATHER_KEY;
-const SPORTS_API_KEY = process.env.SPORTS_API_KEY || "1"; // demo key
-
-// Default leagues
-const FOOTBALL_LEAGUE_ID = "4328"; // EPL
-const F1_LEAGUE_ID = "4370"; // Formula 1
+const ASSET_IDS = process.env.ASSET_IDS ? process.env.ASSET_IDS.split(",") : ["125013769"];
 
 // === HELPERS ===
 
-// ROBLOX ECONOMY
-async function fetchRobloxResale(assetId) {
-  const url = `https://economy.roblox.com/v1/assets/${assetId}/resale-data`;
-  const res = await fetch(url);
-  if (!res.ok) throw new Error("Roblox economy fetch failed");
-  return await res.json();
+// Roblox resale + name
+async function fetchRobloxAsset(assetId) {
+  const [resale, details] = await Promise.all([
+    fetch(`https://economy.roblox.com/v1/assets/${assetId}/resale-data`).then(r => r.json()),
+    fetch(`https://api.roblox.com/marketplace/productinfo?assetId=${assetId}`).then(r => r.json())
+  ]);
+  return { resale, name: details.Name || `Asset ${assetId}` };
 }
 
-async function fetchRobloxItem(assetId) {
-  const url = `https://catalog.roblox.com/v1/assets?assetIds=${assetId}`;
-  const res = await fetch(url);
-  if (!res.ok) throw new Error("Roblox catalog fetch failed");
-  const data = await res.json();
-  return data.data?.[0]?.name || `Asset ${assetId}`;
-}
-
-// WEATHER
+// Weather (single city)
 async function fetchWeather(city) {
-  if (!OPENWEATHER_KEY) return null;
   const url = `https://api.openweathermap.org/data/2.5/weather?q=${encodeURIComponent(
     city
   )}&appid=${OPENWEATHER_KEY}&units=metric`;
@@ -43,231 +32,194 @@ async function fetchWeather(city) {
   return await res.json();
 }
 
-// SPORTS
+// Sports events
 async function fetchSportsEvents(leagueId) {
   const url = `https://www.thesportsdb.com/api/v1/json/${SPORTS_API_KEY}/eventsnextleague.php?id=${leagueId}`;
   const res = await fetch(url);
-  if (!res.ok) throw new Error("SportsDB fetch failed");
+  if (!res.ok) return [];
   return (await res.json()).events || [];
 }
 
-// === TEMPLATES ===
+// === PREDICTION TEMPLATES ===
 
-// Roblox
-function buildRobloxPredictions(assetName, data) {
-  const recent =
-    data.recentAveragePrice ?? data.averagePrice ?? data.lowestPrice ?? 0;
+function buildRobloxPredictions(assets) {
   const templates = [
-    () => ({
-      source: "roblox_economy",
-      Name: `Will ${assetName} exceed ${Math.ceil(recent * 1.1)} R$ in 12 hours?`,
+    (a, recent) => ({
+      source: "roblox",
+      Name: `Will ${a.name} exceed ${Math.ceil(recent * 1.1)} R$ in 12 hours?`,
       Description: `Current average: ${recent} R$.`,
       Answer1: "Yes",
       Answer2: "No",
-      TimeHours: 12,
+      TimeHours: 12
     }),
-    () => ({
-      source: "roblox_economy",
-      Name: `Will ${assetName} drop below ${Math.floor(recent * 0.9)} R$ today?`,
-      Description: `Current average: ${recent} R$.`,
+    (a, recent) => ({
+      source: "roblox",
+      Name: `Will ${a.name} drop below ${Math.floor(recent * 0.9)} R$ today?`,
+      Description: `Recent average: ${recent} R$.`,
       Answer1: "Yes",
       Answer2: "No",
-      TimeHours: 24,
+      TimeHours: 24
     }),
-    () => ({
-      source: "roblox_economy",
-      Name: `Will ${assetName} gain at least 50 R$ in value within 24 hours?`,
-      Description: `Current average: ${recent} R$.`,
+    (a, recent) => ({
+      source: "roblox",
+      Name: `Will ${a.name}'s price stay between ${Math.floor(recent * 0.95)} and ${Math.ceil(recent * 1.05)} R$?`,
+      Description: `Stable range prediction.`,
       Answer1: "Yes",
       Answer2: "No",
-      TimeHours: 24,
-    }),
+      TimeHours: 24
+    })
   ];
 
-  return [templates[Math.floor(Math.random() * templates.length)]()];
+  const preds = [];
+  for (const a of assets) {
+    const recent = a.resale.recentAveragePrice ?? a.resale.averagePrice ?? 100;
+    const randomTemplate = templates[Math.floor(Math.random() * templates.length)];
+    preds.push(randomTemplate(a, recent));
+  }
+  return preds;
 }
 
-// Weather
-function buildWeatherPredictions(city, weather) {
-  const temp = Math.round(weather.main.temp);
-  const desc = weather.weather[0].description;
+function buildWeatherPredictions(weather, city) {
   const templates = [
-    () => ({
+    (w) => ({
       source: "weather",
       Name: `Will it rain in ${city} in the next 24 hours?`,
-      Description: `Currently: ${desc}, ${temp}°C.`,
+      Description: `Current: ${w.weather[0].description}, ${Math.round(w.main.temp)}°C.`,
       Answer1: "Yes",
       Answer2: "No",
-      TimeHours: 24,
+      TimeHours: 24
     }),
-    () => ({
+    (w) => ({
       source: "weather",
-      Name: `Will the temperature in ${city} rise above ${temp + 3}°C today?`,
-      Description: `Currently ${temp}°C with ${desc}.`,
+      Name: `Will the temperature in ${city} exceed ${Math.round(w.main.temp + 3)}°C today?`,
+      Description: `Now: ${Math.round(w.main.temp)}°C.`,
       Answer1: "Yes",
       Answer2: "No",
-      TimeHours: 24,
+      TimeHours: 24
     }),
-    () => ({
+    (w) => ({
       source: "weather",
-      Name: `Will ${city} stay dry and sunny today?`,
-      Description: `Currently ${desc}, ${temp}°C.`,
+      Name: `Will the temperature in ${city} drop below ${Math.round(w.main.temp - 3)}°C today?`,
+      Description: `Now: ${Math.round(w.main.temp)}°C.`,
       Answer1: "Yes",
       Answer2: "No",
-      TimeHours: 24,
-    }),
+      TimeHours: 24
+    })
   ];
-
-  return [templates[Math.floor(Math.random() * templates.length)]()];
+  return [templates[Math.floor(Math.random() * templates.length)](weather)];
 }
 
-// Football predictions
-function buildFootballPredictions(events) {
-  const predictions = [];
-  const templates = [
-    (ev) => ({
-      source: "football",
-      Name: `Will ${ev.strHomeTeam} beat ${ev.strAwayTeam}?`,
-      Description: `${ev.strHomeTeam} vs ${ev.strAwayTeam}, ${ev.dateEvent}.`,
-      Answer1: ev.strHomeTeam,
-      Answer2: ev.strAwayTeam,
-      TimeHours: 48,
-    }),
-    (ev) => ({
-      source: "football",
-      Name: `Will ${ev.strHomeTeam} vs ${ev.strAwayTeam} end in a draw?`,
-      Description: `Match date: ${ev.dateEvent}.`,
-      Answer1: "Yes",
-      Answer2: "No",
-      TimeHours: 48,
-    }),
-    (ev) => ({
-      source: "football",
-      Name: `Will there be over 2.5 goals in ${ev.strHomeTeam} vs ${ev.strAwayTeam}?`,
-      Description: `Upcoming match on ${ev.dateEvent}.`,
-      Answer1: "Yes",
-      Answer2: "No",
-      TimeHours: 48,
-    }),
-    (ev) => ({
-      source: "football",
-      Name: `Will ${ev.strHomeTeam} score first against ${ev.strAwayTeam}?`,
-      Description: `Kickoff: ${ev.dateEvent}.`,
-      Answer1: "Yes",
-      Answer2: "No",
-      TimeHours: 48,
-    }),
-  ];
+function buildSportsPredictions(events, type = "football") {
+  const templates = {
+    football: [
+      (ev) => ({
+        source: "sports",
+        Name: `Will ${ev.strHomeTeam} beat ${ev.strAwayTeam}?`,
+        Description: `${ev.strHomeTeam} vs ${ev.strAwayTeam}, ${ev.dateEvent}.`,
+        Answer1: ev.strHomeTeam,
+        Answer2: ev.strAwayTeam,
+        TimeHours: 48
+      }),
+      (ev) => ({
+        source: "sports",
+        Name: `Will ${ev.strHomeTeam} vs ${ev.strAwayTeam} go over 45 total points?`,
+        Description: `Game date: ${ev.dateEvent}.`,
+        Answer1: "Yes",
+        Answer2: "No",
+        TimeHours: 48
+      }),
+      (ev) => ({
+        source: "sports",
+        Name: `Will ${ev.strHomeTeam} vs ${ev.strAwayTeam} end in a 1-score game?`,
+        Description: `Match date: ${ev.dateEvent}.`,
+        Answer1: "Yes",
+        Answer2: "No",
+        TimeHours: 48
+      })
+    ],
+    f1: [
+      (ev) => ({
+        source: "sports",
+        Name: `Will ${ev.strEvent} be won by a Ferrari driver?`,
+        Description: `Upcoming F1 race on ${ev.dateEvent}.`,
+        Answer1: "Yes",
+        Answer2: "No",
+        TimeHours: 72
+      }),
+      (ev) => ({
+        source: "sports",
+        Name: `Will there be a safety car in ${ev.strEvent}?`,
+        Description: `Scheduled: ${ev.dateEvent}.`,
+        Answer1: "Yes",
+        Answer2: "No",
+        TimeHours: 72
+      })
+    ]
+  };
 
-  for (const ev of events.slice(0, 5)) {
-    const randomTemplate =
-      templates[Math.floor(Math.random() * templates.length)];
-    predictions.push(randomTemplate(ev));
+  return events.slice(0, 5).map(ev => {
+    const t = templates[type][Math.floor(Math.random() * templates[type].length)];
+    return t(ev);
+  });
+}
+
+// Shuffle array helper
+function shuffle(arr) {
+  for (let i = arr.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [arr[i], arr[j]] = [arr[j], arr[i]];
   }
-
-  return predictions;
+  return arr;
 }
 
-// Formula 1 predictions
-function buildF1Predictions(events) {
-  const predictions = [];
-  const templates = [
-    (ev) => ({
-      source: "f1",
-      Name: `Will ${ev.strEvent} be won by a Mercedes driver?`,
-      Description: `${ev.strEvent} on ${ev.dateEvent}.`,
-      Answer1: "Yes",
-      Answer2: "No",
-      TimeHours: 72,
-    }),
-    (ev) => ({
-      source: "f1",
-      Name: `Will there be a Ferrari driver on the podium at ${ev.strEvent}?`,
-      Description: `Race date: ${ev.dateEvent}.`,
-      Answer1: "Yes",
-      Answer2: "No",
-      TimeHours: 72,
-    }),
-    (ev) => ({
-      source: "f1",
-      Name: `Will ${ev.strEvent} have a safety car deployment?`,
-      Description: `${ev.strEvent} on ${ev.dateEvent}.`,
-      Answer1: "Yes",
-      Answer2: "No",
-      TimeHours: 72,
-    }),
-    (ev) => ({
-      source: "f1",
-      Name: `Will Red Bull win ${ev.strEvent}?`,
-      Description: `Race date: ${ev.dateEvent}.`,
-      Answer1: "Yes",
-      Answer2: "No",
-      TimeHours: 72,
-    }),
-  ];
-
-  for (const ev of events.slice(0, 3)) {
-    const randomTemplate =
-      templates[Math.floor(Math.random() * templates.length)];
-    predictions.push(randomTemplate(ev));
-  }
-
-  return predictions;
-}
-
-// === MASTER BUILDER ===
+// === MAIN BUILDER ===
 async function buildPredictions() {
-  const predictions = [];
+  let predictions = [];
 
-  // 1) Roblox
-  const assetIds = process.env.ASSET_IDS
-    ? process.env.ASSET_IDS.split(",")
-    : ["125880153"];
-  for (const assetId of assetIds) {
+  // Roblox
+  try {
+    const assets = await Promise.all(ASSET_IDS.map(id => fetchRobloxAsset(id)));
+    predictions.push(...buildRobloxPredictions(assets).slice(0, 5));
+  } catch (err) {
+    console.warn("Roblox fetch failed:", err.message);
+  }
+
+  // Weather (random city)
+  if (OPENWEATHER_KEY) {
+    const cities = (process.env.WEATHER_CITY || "London").split(",");
+    const city = cities[Math.floor(Math.random() * cities.length)].trim();
     try {
-      const [resale, name] = await Promise.all([
-        fetchRobloxResale(assetId),
-        fetchRobloxItem(assetId),
-      ]);
-      predictions.push(...buildRobloxPredictions(name, resale));
+      const weather = await fetchWeather(city);
+      if (weather) predictions.push(...buildWeatherPredictions(weather, city));
     } catch (err) {
-      console.warn("Roblox fetch failed", assetId, err.message);
+      console.warn("Weather fetch failed:", err.message);
     }
   }
 
-  // 2) Weather
-  const weatherCity = process.env.WEATHER_CITY || "London";
-  const weather = await fetchWeather(weatherCity);
-  if (weather) {
-    predictions.push(...buildWeatherPredictions(weatherCity, weather));
-  }
-
-  // 3) Football
+  // Sports (NFL + F1)
   try {
-    const events = await fetchSportsEvents(FOOTBALL_LEAGUE_ID);
-    predictions.push(...buildFootballPredictions(events));
+    const nfl = await fetchSportsEvents("4391"); // NFL
+    const f1 = await fetchSportsEvents("4370"); // F1
+    predictions.push(...buildSportsPredictions(nfl, "football").slice(0, 5));
+    predictions.push(...buildSportsPredictions(f1, "f1").slice(0, 5));
   } catch (err) {
-    console.warn("Football fetch failed:", err.message);
+    console.warn("Sports fetch failed:", err.message);
   }
 
-  // 4) Formula 1
-  try {
-    const events = await fetchSportsEvents(F1_LEAGUE_ID);
-    predictions.push(...buildF1Predictions(events));
-  } catch (err) {
-    console.warn("F1 fetch failed:", err.message);
-  }
+  // Shuffle and limit: 5 from each type
+  const roblox = predictions.filter(p => p.source === "roblox").slice(0, 5);
+  const weather = predictions.filter(p => p.source === "weather").slice(0, 5);
+  const sports = predictions.filter(p => p.source === "sports").slice(0, 5);
 
-  return predictions;
+  return shuffle([...roblox, ...weather, ...sports]);
 }
 
-// === ROUTES ===
+// === ROUTE ===
 app.get("/predictions", async (req, res) => {
   try {
     const preds = await buildPredictions();
     res.json({ ok: true, predictions: preds });
   } catch (err) {
-    console.error(err);
     res.status(500).json({ ok: false, error: err.message });
   }
 });
