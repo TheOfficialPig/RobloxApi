@@ -85,7 +85,7 @@ async function fetchNFLEvents() {
 }
 
 async function fetchNFLGameResult(gameId) {
-  const url = `https://api.sportsdata.io/v3/nfl/scores/json/ScoresByWeek/2025REG/1?key=${SPORTSDATA_API_KEY}`;
+  const url = `https://api.sportsdata.io/v3/nfl/scores/json/ScoresByWeek/2025REG/4?key=${SPORTSDATA_API_KEY}`;
   const res = await fetch(url);
   if (!res.ok) return null;
   const games = await res.json();
