@@ -9,7 +9,10 @@ const PORT = process.env.PORT || 3000;
 
 const OPENWEATHER_KEY = process.env.OPENWEATHER_KEY;
 const SPORTS_API_KEY = process.env.SPORTS_API_KEY || "1"; // demo key
-const SPORTS_LEAGUE_ID = process.env.SPORTS_LEAGUE_ID || "4328"; // EPL default
+
+// Default leagues
+const FOOTBALL_LEAGUE_ID = "4328"; // EPL
+const F1_LEAGUE_ID = "4370"; // Formula 1
 
 // === HELPERS ===
 
@@ -41,7 +44,7 @@ async function fetchWeather(city) {
 }
 
 // SPORTS
-async function fetchSportsEvents(leagueId = SPORTS_LEAGUE_ID) {
+async function fetchSportsEvents(leagueId) {
   const url = `https://www.thesportsdb.com/api/v1/json/${SPORTS_API_KEY}/eventsnextleague.php?id=${leagueId}`;
   const res = await fetch(url);
   if (!res.ok) throw new Error("SportsDB fetch failed");
@@ -49,7 +52,6 @@ async function fetchSportsEvents(leagueId = SPORTS_LEAGUE_ID) {
 }
 
 // === TEMPLATES ===
-// (Roblox, Weather, Sports templates unchanged — kept from previous version)
 
 // Roblox
 function buildRobloxPredictions(assetName, data) {
@@ -119,12 +121,12 @@ function buildWeatherPredictions(city, weather) {
   return [templates[Math.floor(Math.random() * templates.length)]()];
 }
 
-// Sports
-function buildSportsPredictions(events) {
+// Football predictions
+function buildFootballPredictions(events) {
   const predictions = [];
   const templates = [
     (ev) => ({
-      source: "sports",
+      source: "football",
       Name: `Will ${ev.strHomeTeam} beat ${ev.strAwayTeam}?`,
       Description: `${ev.strHomeTeam} vs ${ev.strAwayTeam}, ${ev.dateEvent}.`,
       Answer1: ev.strHomeTeam,
@@ -132,7 +134,7 @@ function buildSportsPredictions(events) {
       TimeHours: 48,
     }),
     (ev) => ({
-      source: "sports",
+      source: "football",
       Name: `Will ${ev.strHomeTeam} vs ${ev.strAwayTeam} end in a draw?`,
       Description: `Match date: ${ev.dateEvent}.`,
       Answer1: "Yes",
@@ -140,7 +142,7 @@ function buildSportsPredictions(events) {
       TimeHours: 48,
     }),
     (ev) => ({
-      source: "sports",
+      source: "football",
       Name: `Will there be over 2.5 goals in ${ev.strHomeTeam} vs ${ev.strAwayTeam}?`,
       Description: `Upcoming match on ${ev.dateEvent}.`,
       Answer1: "Yes",
@@ -148,7 +150,7 @@ function buildSportsPredictions(events) {
       TimeHours: 48,
     }),
     (ev) => ({
-      source: "sports",
+      source: "football",
       Name: `Will ${ev.strHomeTeam} score first against ${ev.strAwayTeam}?`,
       Description: `Kickoff: ${ev.dateEvent}.`,
       Answer1: "Yes",
@@ -166,6 +168,53 @@ function buildSportsPredictions(events) {
   return predictions;
 }
 
+// Formula 1 predictions
+function buildF1Predictions(events) {
+  const predictions = [];
+  const templates = [
+    (ev) => ({
+      source: "f1",
+      Name: `Will ${ev.strEvent} be won by a Mercedes driver?`,
+      Description: `${ev.strEvent} on ${ev.dateEvent}.`,
+      Answer1: "Yes",
+      Answer2: "No",
+      TimeHours: 72,
+    }),
+    (ev) => ({
+      source: "f1",
+      Name: `Will there be a Ferrari driver on the podium at ${ev.strEvent}?`,
+      Description: `Race date: ${ev.dateEvent}.`,
+      Answer1: "Yes",
+      Answer2: "No",
+      TimeHours: 72,
+    }),
+    (ev) => ({
+      source: "f1",
+      Name: `Will ${ev.strEvent} have a safety car deployment?`,
+      Description: `${ev.strEvent} on ${ev.dateEvent}.`,
+      Answer1: "Yes",
+      Answer2: "No",
+      TimeHours: 72,
+    }),
+    (ev) => ({
+      source: "f1",
+      Name: `Will Red Bull win ${ev.strEvent}?`,
+      Description: `Race date: ${ev.dateEvent}.`,
+      Answer1: "Yes",
+      Answer2: "No",
+      TimeHours: 72,
+    }),
+  ];
+
+  for (const ev of events.slice(0, 3)) {
+    const randomTemplate =
+      templates[Math.floor(Math.random() * templates.length)];
+    predictions.push(randomTemplate(ev));
+  }
+
+  return predictions;
+}
+
 // === MASTER BUILDER ===
 async function buildPredictions() {
   const predictions = [];
@@ -173,7 +222,7 @@ async function buildPredictions() {
   // 1) Roblox
   const assetIds = process.env.ASSET_IDS
     ? process.env.ASSET_IDS.split(",")
-    : ["125880153"]; // default item
+    : ["125880153"];
   for (const assetId of assetIds) {
     try {
       const [resale, name] = await Promise.all([
@@ -193,12 +242,20 @@ async function buildPredictions() {
     predictions.push(...buildWeatherPredictions(weatherCity, weather));
   }
 
-  // 3) Sports
+  // 3) Football
   try {
-    const events = await fetchSportsEvents(SPORTS_LEAGUE_ID);
-    predictions.push(...buildSportsPredictions(events));
+    const events = await fetchSportsEvents(FOOTBALL_LEAGUE_ID);
+    predictions.push(...buildFootballPredictions(events));
   } catch (err) {
-    console.warn("Sports fetch failed:", err.message);
+    console.warn("Football fetch failed:", err.message);
+  }
+
+  // 4) Formula 1
+  try {
+    const events = await fetchSportsEvents(F1_LEAGUE_ID);
+    predictions.push(...buildF1Predictions(events));
+  } catch (err) {
+    console.warn("F1 fetch failed:", err.message);
   }
 
   return predictions;
