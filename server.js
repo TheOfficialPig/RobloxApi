@@ -19,7 +19,7 @@ const SPORTSDATA_API_KEY = process.env.SPORTSDATA_API_KEY;
 
 // ✅ NEW ENV VARS for NFL
 const NFL_SEASON = process.env.NFL_SEASON || "2025REG"; // example: 2025REG, 2024POST
-const NFL_WEEK = parseInt(process.env.NFL_WEEK || "1"); // defaults to 1
+const NFL_WEEK = parseInt(process.env.NFL_WEEK || "4"); // defaults to 1
 
 let activePredictions = loadActive();
 let resolvedPredictions = loadResolved(20);
@@ -237,7 +237,7 @@ async function buildPredictions() {
         Description: "Check back later when new games are scheduled.",
         Answer1: "None",
         Answer2: "None",
-        TimeHours: 24,
+        TimeHours: 0.01,
         created: now,
         expires: now + 24 * 60 * 60 * 1000,
         meta: { league: "NFL" }
@@ -261,7 +261,7 @@ async function buildPredictions() {
         Description: "Check back later when more items are active.",
         Answer1: "None",
         Answer2: "None",
-        TimeHours: 12,
+        TimeHours: 0.01,
         created: now,
         expires: now + 12 * 60 * 60 * 1000,
         meta: {}
