@@ -164,22 +164,35 @@ function buildRobloxPredictions(assets) {
 function buildNFLPredictions(events) {
   const predictions = [];
 
-  for (const ev of events) {
-    const line = 35 + Math.floor(Math.random() * 15); // 35–50 O/U line
+  const now = new Date();
+  const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const startOfTomorrow = new Date(startOfToday);
+  startOfTomorrow.setDate(startOfTomorrow.getDate() + 1);
+  const startOfDayAfterTomorrow = new Date(startOfTomorrow);
+  startOfDayAfterTomorrow.setDate(startOfDayAfterTomorrow.getDate() + 1);
 
-    predictions.push({
-      source: "sports",
-      Name: `Will ${ev.HomeTeam} vs ${ev.AwayTeam} total score be over/under ${line}?`,
-      Description: `Kickoff: ${ev.Date} (Home: ${ev.HomeTeam}, Away: ${ev.AwayTeam})`,
-      Answer1: `Over ${line}`,
-      Answer2: `Under ${line}`,
-      TimeHours: 48,
-      meta: { eventId: ev.GameKey, league: "NFL", line }
-    });
+  for (const ev of events) {
+    const gameDate = new Date(ev.Date);
+
+    // Only keep games today or tomorrow
+    if (gameDate >= startOfToday && gameDate < startOfDayAfterTomorrow) {
+      const line = 35 + Math.floor(Math.random() * 15); // 35–50 O/U line
+
+      predictions.push({
+        source: "sports",
+        Name: `Will ${ev.HomeTeam} vs ${ev.AwayTeam} total score be over/under ${line}?`,
+        Description: `Kickoff: ${ev.Date} (Home: ${ev.HomeTeam}, Away: ${ev.AwayTeam})`,
+        Answer1: `Over ${line}`,
+        Answer2: `Under ${line}`,
+        TimeHours: 48,
+        meta: { eventId: ev.GameKey, league: "NFL", line }
+      });
+    }
   }
 
   return predictions;
 }
+
 
 // === RESOLUTION ===
 async function resolvePredictions() {
