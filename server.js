@@ -160,10 +160,6 @@ function buildRobloxPredictions(assets) {
   return predictions;
 }
 
-
-  return predictions;
-}
-
 // NFL
 function buildNFLPredictions(events) {
   const predictions = [];
