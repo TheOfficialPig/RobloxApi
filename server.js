@@ -48,7 +48,6 @@ function dedupePredictions(preds) {
 }
 
 // === HELPERS ===
-
 // Weather
 async function fetchWeather(city) {
   const url = `https://api.openweathermap.org/data/2.5/weather?q=${encodeURIComponent(city)}&appid=${OPENWEATHER_KEY}&units=metric`;
@@ -124,8 +123,6 @@ async function fetchNFLGameResult(gameId) {
 }
 
 // === PREDICTION BUILDERS ===
-
-// Weather
 function buildWeatherPredictions(weatherCities) {
   const predictions = [];
   for (const city of weatherCities) {
@@ -164,7 +161,6 @@ function buildRobloxPredictions(assets) {
   return predictions;
 }
 
-// NFL
 function buildNFLPredictions(events) {
   const predictions = [];
   const now = new Date();
@@ -176,7 +172,6 @@ function buildNFLPredictions(events) {
 
   for (const ev of events) {
     const gameDate = new Date(ev.Date);
-    // Only keep games today or tomorrow
     if (gameDate >= startOfToday && gameDate < startOfDayAfterTomorrow) {
       const line = 35 + Math.floor(Math.random() * 15); // 35–50 O/U line
       predictions.push({
@@ -249,76 +244,42 @@ async function resolvePredictions() {
   saveActive(activePredictions);
 }
 
-// === BUILDER (limit, with NFL fallback) ===
+// === BUILDER (no repeats) ===
 async function buildPredictions() {
   const newPredictions = [];
   const now = Date.now();
 
-  // --- SPORTS FIRST ---
+  // --- SPORTS ---
   try {
     const nflEvents = await fetchNFLEvents();
     const nflPreds = buildNFLPredictions(nflEvents).slice(0, 7);
-    if (nflPreds.length > 0) {
-      newPredictions.push(...nflPreds);
-    } else {
-      console.warn("⚠️ No NFL predictions could be built, adding placeholder");
-      newPredictions.push({
-        id: nextPredictionId++,
-        source: "sports",
-        Name: "No NFL games available right now",
-        Description: "Check back later when new games are scheduled.",
-        Answer1: "None",
-        Answer2: "None",
-        TimeHours: 0.01,
-        created: now,
-        expires: now + 24 * 60 * 60 * 1000,
-        meta: { league: "NFL" }
-      });
-    }
+    newPredictions.push(...nflPreds);
   } catch (err) {
     console.warn("NFL fetch failed:", err.message);
   }
 
-  // --- ROBLOX SECOND ---
+  // --- ROBLOX ---
   try {
     const items = await fetchHighDemandItems();
     const robloxPreds = buildRobloxPredictions(items).slice(0, 7);
-    if (robloxPreds.length > 0) {
-      newPredictions.push(...robloxPreds);
-    } else {
-      newPredictions.push({
-        id: nextPredictionId++,
-        source: "roblox",
-        Name: "No Roblox high-demand items available",
-        Description: "Check back later when more items are active.",
-        Answer1: "None",
-        Answer2: "None",
-        TimeHours: 0.01,
-        created: now,
-        expires: now + 12 * 60 * 60 * 1000,
-        meta: {}
-      });
-    }
+    newPredictions.push(...robloxPreds);
   } catch (err) {
     console.warn("Roblox build failed:", err.message);
   }
 
-  // --- WEATHER (limit 5 unique, no repeats) ---
-  const weatherCities = (process.env.WEATHER_CITY || "Los Angeles,London,Tokyo,Dallas,Fort Worth")
+  // --- WEATHER ---
+  const weatherCities = (process.env.WEATHER_CITY || "Los Angeles,London,Tokyo")
     .split(",")
     .map((c) => c.trim());
   const chosenCities = [];
-  const maxWeather = Math.min(weatherCities.length, 5);
-  for (let i = 0; i < maxWeather; i++) {
-    const city = weatherCities[i];
+  for (const city of weatherCities.slice(0, 5)) {
     const data = await fetchWeather(city);
     if (data) chosenCities.push({ city, data });
   }
-  const weatherPreds = buildWeatherPredictions(chosenCities);
-  newPredictions.push(...weatherPreds);
+  newPredictions.push(...buildWeatherPredictions(chosenCities));
 
   // --- Attach IDs ---
-  let fresh = newPredictions.map((p) => {
+  const prepared = newPredictions.map((p) => {
     if (!p.id) {
       p.id = nextPredictionId++;
       p.created = now;
@@ -327,10 +288,12 @@ async function buildPredictions() {
     return p;
   });
 
-  // ✅ Deduplicate before saving
-  fresh = dedupePredictions(fresh);
+  // ✅ Deduplicate across existing + new
+  const merged = dedupePredictions([...activePredictions, ...prepared]);
 
-  activePredictions = fresh;
+  // ✅ Limit to 20 max
+  activePredictions = merged.slice(0, 20);
+
   saveActive(activePredictions);
 }
 
@@ -338,13 +301,11 @@ async function buildPredictions() {
 async function refreshPredictions() {
   await resolvePredictions();
 
-  // filter expired (except roblox, which only resolves on RAP change)
   const now = Date.now();
   activePredictions = activePredictions.filter(
     (p) => p.source === "roblox" || p.expires > now
   );
 
-  // refill back to 20 if needed
   if (activePredictions.length < 20) {
     await buildPredictions();
   }
