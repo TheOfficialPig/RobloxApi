@@ -312,7 +312,13 @@ async function refreshPredictions() {
 }
 
 setInterval(refreshPredictions, 5 * 60 * 1000);
-await buildPredictions();
+
+// ✅ Only build if we have no saved predictions
+if (activePredictions.length < 20) {
+  await buildPredictions();
+} else {
+  console.log(`♻️ Loaded ${activePredictions.length} active predictions from storage`);
+}
 
 // === ROUTES ===
 app.get("/predictions", (req, res) => {
