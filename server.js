@@ -245,6 +245,7 @@ async function resolvePredictions() {
 }
 
 // === BUILDER (no repeats) ===
+// === BUILDER (no repeats, no placeholders) ===
 async function buildPredictions() {
   const newPredictions = [];
   const now = Date.now();
@@ -253,7 +254,11 @@ async function buildPredictions() {
   try {
     const nflEvents = await fetchNFLEvents();
     const nflPreds = buildNFLPredictions(nflEvents).slice(0, 7);
-    newPredictions.push(...nflPreds);
+    if (nflPreds.length > 0) {
+      newPredictions.push(...nflPreds);
+    } else {
+      console.log("⚠️ No NFL predictions built (no upcoming games)");
+    }
   } catch (err) {
     console.warn("NFL fetch failed:", err.message);
   }
@@ -262,7 +267,11 @@ async function buildPredictions() {
   try {
     const items = await fetchHighDemandItems();
     const robloxPreds = buildRobloxPredictions(items).slice(0, 7);
-    newPredictions.push(...robloxPreds);
+    if (robloxPreds.length > 0) {
+      newPredictions.push(...robloxPreds);
+    } else {
+      console.log("⚠️ No Roblox high-demand items found");
+    }
   } catch (err) {
     console.warn("Roblox build failed:", err.message);
   }
@@ -276,7 +285,10 @@ async function buildPredictions() {
     const data = await fetchWeather(city);
     if (data) chosenCities.push({ city, data });
   }
-  newPredictions.push(...buildWeatherPredictions(chosenCities));
+  const weatherPreds = buildWeatherPredictions(chosenCities);
+  if (weatherPreds.length > 0) {
+    newPredictions.push(...weatherPreds);
+  }
 
   // --- Attach IDs ---
   const prepared = newPredictions.map((p) => {
