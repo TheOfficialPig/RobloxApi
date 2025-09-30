@@ -24,6 +24,13 @@ let nextPredictionId = (activePredictions.length > 0)
   ? Math.max(...activePredictions.map(p => p.id || 0)) + 1
   : 1;
 
+function formatNumber(num) {
+  if (num >= 1_000_000) return (num / 1_000_000).toFixed(1).replace(/\.0$/, "") + "M";
+  if (num >= 1_000) return (num / 1_000).toFixed(1).replace(/\.0$/, "") + "K";
+  return num.toString();
+}
+
+
 // === HELPERS ===
 
 // Weather
@@ -121,24 +128,26 @@ function buildWeatherPredictions(weatherCities) {
   return predictions;
 }
 
-// Roblox Predictions (High-demand items only)
 function buildRobloxPredictions(assets) {
   const predictions = [];
   for (const a of assets) {
     if (!a.rap || a.rap <= 0) continue;
 
+    const rapFormatted = formatNumber(a.rap);
+
     predictions.push({
       source: "roblox",
-      Name: `Will ${a.name} sell for more or less than ${a.rap} R$ on the next sale?`,
-      Description: `Current RAP: ${a.rap} R$ (Demand: ${a.demand === 4 ? "Amazing" : "High"}).`,
-      Answer1: `Higher than ${a.rap} R$`,
-      Answer2: `Lower than ${a.rap} R$`,
+      Name: `Will ${a.name} sell for more or less than ${rapFormatted} R$ on the next sale?`,
+      Description: `Current RAP: ${rapFormatted} R$ (Demand: ${a.demand === 4 ? "Amazing" : "High"}).`,
+      Answer1: `Higher than ${rapFormatted} R$`,
+      Answer2: `Lower than ${rapFormatted} R$`,
       TimeHours: 9999, // keep active until RAP changes
       meta: { assetId: a.assetId, lastKnownRap: a.rap }
     });
   }
   return predictions;
 }
+
 
 // NFL
 function buildNFLPredictions(events) {
