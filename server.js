@@ -17,9 +17,11 @@ const PORT = process.env.PORT || 3000;
 const OPENWEATHER_KEY = process.env.OPENWEATHER_KEY;
 const SPORTSDATA_API_KEY = process.env.SPORTSDATA_API_KEY;
 
-// ✅ NEW ENV VARS for NFL
-const NFL_SEASON = process.env.NFL_SEASON || "2025REG"; // example: 2025REG, 2024POST
-const NFL_WEEK = parseInt(process.env.NFL_WEEK || "4"); // defaults to 1
+// ✅ NEW NFL CONFIG (separate year + type)
+const NFL_SEASON_YEAR = process.env.NFL_SEASON_YEAR || "2025";
+const NFL_SEASON_TYPE = process.env.NFL_SEASON_TYPE || "REG"; // REG, POST, PRE
+const NFL_SEASON = `${NFL_SEASON_YEAR}${NFL_SEASON_TYPE}`;
+const NFL_WEEK = parseInt(process.env.NFL_WEEK || "1", 10);
 
 let activePredictions = loadActive();
 let resolvedPredictions = loadResolved(20);
@@ -80,18 +82,31 @@ async function fetchMovingLimiteds() {
   }
 }
 
-// Sports (NFL from Sportsdata.io)
+// === NFL HELPERS ===
 async function fetchNFLEvents() {
-  const url = `https://api.sportsdata.io/v3/nfl/scores/json/Schedule/${NFL_SEASON}?key=${SPORTSDATA_API_KEY}`;
+  const url = `https://api.sportsdata.io/v3/nfl/scores/json/Schedules/${NFL_SEASON}?key=${SPORTSDATA_API_KEY}`;
+  console.log("Fetching NFL Schedule:", url);
+
   const res = await fetch(url);
-  if (!res.ok) throw new Error("Sportsdata NFL fetch failed");
-  return await res.json();
+  if (!res.ok) throw new Error(`Sportsdata NFL fetch failed: ${res.status}`);
+  const data = await res.json();
+
+  if (!Array.isArray(data) || data.length === 0) {
+    console.warn("⚠️ No NFL games returned for season:", NFL_SEASON);
+  }
+
+  return data;
 }
 
 async function fetchNFLGameResult(gameId) {
   const url = `https://api.sportsdata.io/v3/nfl/scores/json/ScoresByWeek/${NFL_SEASON}/${NFL_WEEK}?key=${SPORTSDATA_API_KEY}`;
+  console.log("Fetching NFL Results:", url);
+
   const res = await fetch(url);
-  if (!res.ok) return null;
+  if (!res.ok) {
+    console.warn("NFL result fetch failed:", res.status);
+    return null;
+  }
   const games = await res.json();
   return games.find((g) => g.GameKey === gameId) || null;
 }
@@ -218,7 +233,7 @@ async function resolvePredictions() {
   saveActive(activePredictions);
 }
 
-// === BUILDER (limit, no filler weather) ===
+// === BUILDER (limit, with NFL fallback) ===
 async function buildPredictions() {
   const newPredictions = [];
   const now = Date.now();
@@ -230,6 +245,7 @@ async function buildPredictions() {
     if (nflPreds.length > 0) {
       newPredictions.push(...nflPreds);
     } else {
+      console.warn("⚠️ No NFL predictions could be built, adding placeholder");
       newPredictions.push({
         id: nextPredictionId++,
         source: "sports",
@@ -329,5 +345,5 @@ app.get("/predictions", (req, res) => {
 
 app.listen(PORT, () => {
   console.log(`Prediction server running on port ${PORT}`);
-  console.log(`📅 NFL Season: ${NFL_SEASON}, Week: ${NFL_WEEK}`);
+  console.log(`📅 NFL Season: ${NFL_SEASON_YEAR} ${NFL_SEASON_TYPE}, Week: ${NFL_WEEK}`);
 });
