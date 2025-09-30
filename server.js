@@ -30,6 +30,22 @@ function formatNumber(num) {
   return num.toString();
 }
 
+// ✅ NEW: Dedupe helper
+function dedupePredictions(preds) {
+  const seen = new Set();
+  return preds.filter(p => {
+    let key = "";
+
+    if (p.source === "roblox") key = `roblox-${p.meta.assetId}`;
+    else if (p.source === "sports") key = `sports-${p.meta.eventId}-${p.meta.line}`;
+    else if (p.source === "weather") key = `weather-${p.meta.city}-${p.meta.target}`;
+    else key = `${p.source}-${p.Name}`;
+
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
 
 // === HELPERS ===
 
@@ -137,8 +153,8 @@ function buildRobloxPredictions(assets) {
 
     predictions.push({
       source: "roblox",
-      Name: `Will ${a.name} sell for more or less than ${rapFormatted} R$ on the next sale?`,
-      Description: `Current RAP: ${rapFormatted} R$ (Demand: ${a.demand === 4 ? "Amazing" : "High"}).`,
+      Name: `Will ${a.name} sell for more or less than ${rapFormatted} R$?`,
+      Description: `Current RAP: ${rapFormatted} R$.`,
       Answer1: `Higher than ${rapFormatted} R$`,
       Answer2: `Lower than ${rapFormatted} R$`,
       TimeHours: 9999, // keep active until RAP changes
@@ -147,7 +163,6 @@ function buildRobloxPredictions(assets) {
   }
   return predictions;
 }
-
 
 // NFL
 function buildNFLPredictions(events) {
@@ -289,7 +304,7 @@ async function buildPredictions() {
   }
 
   // --- WEATHER (limit 5 unique, no repeats) ---
-  const weatherCities = (process.env.WEATHER_CITY || "Los Angeles,London,Tokyo")
+  const weatherCities = (process.env.WEATHER_CITY || "Los Angeles,London,Tokyo,Dallas,Fort Worth")
     .split(",")
     .map((c) => c.trim());
   const chosenCities = [];
@@ -303,7 +318,7 @@ async function buildPredictions() {
   newPredictions.push(...weatherPreds);
 
   // --- Attach IDs ---
-  const fresh = newPredictions.map((p) => {
+  let fresh = newPredictions.map((p) => {
     if (!p.id) {
       p.id = nextPredictionId++;
       p.created = now;
@@ -311,6 +326,9 @@ async function buildPredictions() {
     }
     return p;
   });
+
+  // ✅ Deduplicate before saving
+  fresh = dedupePredictions(fresh);
 
   activePredictions = fresh;
   saveActive(activePredictions);
