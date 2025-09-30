@@ -135,27 +135,31 @@ function buildWeatherPredictions(weatherCities) {
   return predictions;
 }
 
-// Roblox
+// Roblox Predictions (High-demand items only)
 function buildRobloxPredictions(assets) {
   const predictions = [];
 
   for (const a of assets) {
-    const current = a.recentAveragePrice;
-    const target =
-      current + (Math.random() < 0.5
-        ? -Math.floor(current * 0.1)
-        : Math.floor(current * 0.1));
+    // Only Amazing or High demand items
+    if (a.demand !== "Amazing" && a.demand !== "High") continue;
+
+    const current = a.recentAveragePrice || 0;
+    if (current <= 0) continue;
 
     predictions.push({
       source: "roblox",
-      Name: `Will ${a.name} average over/under ${target} R$ in 12 hours?`,
-      Description: `Currently ${current} R$ (Demand: ${a.demand || "N/A"}).`,
-      Answer1: `Over ${target} R$`,
-      Answer2: `Under ${target} R$`,
-      TimeHours: 12,
-      meta: { assetId: a.assetId, target }
+      Name: `Will ${a.name} sell for more or less than ${current} R$ on the next sale?`,
+      Description: `Current RAP: ${current} R$ (Demand: ${a.demand}).`,
+      Answer1: `Higher than ${current} R$`,
+      Answer2: `Lower than ${current} R$`,
+      TimeHours: 6, // shorter window since it depends on next sale
+      meta: { assetId: a.assetId, target: current }
     });
   }
+
+  return predictions;
+}
+
 
   return predictions;
 }
@@ -216,13 +220,14 @@ async function resolvePredictions() {
       }
 
       if (p.source === "roblox") {
-        const movers = await fetchMovingLimiteds();
-        const match = movers.find((a) => a.assetId === p.meta.assetId);
-        if (match) {
-          const recent = match.recentAveragePrice ?? 0;
-          result = recent > p.meta.target ? "Over" : "Under";
-        }
-      }
+  const movers = await fetchMovingLimiteds();
+  const match = movers.find((a) => a.assetId === p.meta.assetId);
+  if (match) {
+    const recent = match.recentAveragePrice ?? 0;
+    result = recent > p.meta.target ? "Higher" : "Lower";
+  }
+}
+
 
       if (p.source === "sports") {
         const ev = await fetchNFLGameResult(p.meta.eventId);
