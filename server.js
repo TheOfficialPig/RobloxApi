@@ -10,7 +10,7 @@ const PORT = process.env.PORT || 3000;
 const OPENWEATHER_KEY = process.env.OPENWEATHER_KEY;
 const SPORTSDATA_API_KEY = process.env.SPORTSDATA_API_KEY;
 
-// ✅ NEW NFL CONFIG (separate year + type)
+// ✅ NFL CONFIG
 const NFL_SEASON_YEAR = process.env.NFL_SEASON_YEAR || "2025";
 const NFL_SEASON_TYPE = process.env.NFL_SEASON_TYPE || "REG"; // REG, POST, PRE
 const NFL_SEASON = `${NFL_SEASON_YEAR}${NFL_SEASON_TYPE}`;
@@ -30,25 +30,39 @@ function formatNumber(num) {
   return num.toString();
 }
 
-// ✅ NEW: Dedupe helper
+// === DEDUPE ===
 function dedupePredictions(preds) {
-  const seen = new Set();
-  return preds.filter(p => {
+  const seen = [];
+  const unique = [];
+
+  for (const p of preds) {
     let key = "";
 
-    if (p.source === "roblox") key = `roblox-${p.meta.assetId}`;
-    else if (p.source === "sports") key = `sports-${p.meta.eventId}-${p.meta.line}`;
-    else if (p.source === "weather") key = `weather-${p.meta.city}-${p.meta.target}`;
-    else key = `${p.source}-${p.Name}`;
+    if (p.source === "roblox") {
+      key = `roblox-${p.meta.assetId}-${p.meta.lastKnownRap}`;
+    } else if (p.source === "sports") {
+      key = `sports-${p.meta.eventId}`;
+    } else if (p.source === "weather") {
+      // Near-duplicate filter (within ±5°F for same city)
+      const existing = seen.find(
+        (k) => k.startsWith(`weather-${p.meta.city}-`) &&
+               Math.abs(parseInt(k.split("-").pop()) - p.meta.target) < 5
+      );
+      if (existing) continue;
+      key = `weather-${p.meta.city}-${p.meta.target}`;
+    } else {
+      key = `${p.source}-${p.Name}`;
+    }
 
-    if (seen.has(key)) return false;
-    seen.add(key);
-    return true;
-  });
+    if (!seen.includes(key)) {
+      seen.push(key);
+      unique.push(p);
+    }
+  }
+  return unique;
 }
 
 // === HELPERS ===
-// Weather
 async function fetchWeather(city) {
   const url = `https://api.openweathermap.org/data/2.5/weather?q=${encodeURIComponent(city)}&appid=${OPENWEATHER_KEY}&units=metric`;
   const res = await fetch(url);
@@ -56,7 +70,6 @@ async function fetchWeather(city) {
   return await res.json();
 }
 
-// Roblox (via Rolimons) — only highest demand items
 async function fetchHighDemandItems() {
   try {
     const url = "https://api.rolimons.com/items/v1/itemdetails";
@@ -87,10 +100,10 @@ async function fetchHighDemandItems() {
           lastUpdated: now
         };
       })
-      .filter(item => item.demand === 3 || item.demand === 4) // High or Amazing demand only
-      .sort((a, b) => b.rap - a.rap); // sort by RAP
+      .filter(item => item.demand === 3 || item.demand === 4)
+      .sort((a, b) => b.rap - a.rap);
 
-    return filtered.slice(0, 10); // take top 10
+    return filtered.slice(0, 10);
   } catch (err) {
     console.warn("fetchHighDemandItems error:", err.message);
     return [];
@@ -104,9 +117,6 @@ async function fetchNFLEvents() {
   const res = await fetch(url);
   if (!res.ok) throw new Error(`Sportsdata NFL fetch failed: ${res.status}`);
   const data = await res.json();
-  if (!Array.isArray(data) || data.length === 0) {
-    console.warn("⚠️ No NFL games returned for season:", NFL_SEASON);
-  }
   return data;
 }
 
@@ -114,10 +124,7 @@ async function fetchNFLGameResult(gameId) {
   const url = `https://api.sportsdata.io/v3/nfl/scores/json/ScoresByWeek/${NFL_SEASON}/${NFL_WEEK}?key=${SPORTSDATA_API_KEY}`;
   console.log("Fetching NFL Results:", url);
   const res = await fetch(url);
-  if (!res.ok) {
-    console.warn("NFL result fetch failed:", res.status);
-    return null;
-  }
+  if (!res.ok) return null;
   const games = await res.json();
   return games.find((g) => g.GameKey === gameId) || null;
 }
@@ -127,7 +134,20 @@ function buildWeatherPredictions(weatherCities) {
   const predictions = [];
   for (const city of weatherCities) {
     const currentF = Math.round((city.data.main.temp * 9) / 5 + 32);
-    const target = currentF + (Math.random() < 0.5 ? -5 : 5);
+
+    // Round to nearest 5°F
+    const rounded = Math.round(currentF / 5) * 5;
+    const target = rounded + (Math.random() < 0.5 ? -5 : 5);
+
+    // Skip if already active with similar target
+    const alreadyExists = activePredictions.some(
+      (p) =>
+        p.source === "weather" &&
+        p.meta.city === city.city &&
+        Math.abs(p.meta.target - target) < 5
+    );
+    if (alreadyExists) continue;
+
     predictions.push({
       source: "weather",
       Name: `Will the temperature in ${city.city} be over/under ${target}°F in 24 hours?`,
@@ -148,13 +168,22 @@ function buildRobloxPredictions(assets) {
 
     const rapFormatted = formatNumber(a.rap);
 
+    // Skip if already tracking this asset at this RAP
+    const alreadyExists = activePredictions.some(
+      (p) =>
+        p.source === "roblox" &&
+        p.meta.assetId === a.assetId &&
+        p.meta.lastKnownRap === a.rap
+    );
+    if (alreadyExists) continue;
+
     predictions.push({
       source: "roblox",
       Name: `Will ${a.name} sell for more or less than ${rapFormatted} R$?`,
       Description: `Current RAP: ${rapFormatted} R$.`,
       Answer1: `Higher than ${rapFormatted} R$`,
       Answer2: `Lower than ${rapFormatted} R$`,
-      TimeHours: 9999, // keep active until RAP changes
+      TimeHours: 9999,
       meta: { assetId: a.assetId, lastKnownRap: a.rap }
     });
   }
@@ -173,7 +202,12 @@ function buildNFLPredictions(events) {
   for (const ev of events) {
     const gameDate = new Date(ev.Date);
     if (gameDate >= startOfToday && gameDate < startOfDayAfterTomorrow) {
-      const line = 35 + Math.floor(Math.random() * 15); // 35–50 O/U line
+      const alreadyExists = activePredictions.some(
+        (p) => p.source === "sports" && p.meta.eventId === ev.GameKey
+      );
+      if (alreadyExists) continue;
+
+      const line = 35 + Math.floor(Math.random() * 15);
       predictions.push({
         source: "sports",
         Name: `Will ${ev.HomeTeam} vs ${ev.AwayTeam} total score be over/under ${line}?`,
@@ -216,7 +250,7 @@ async function resolvePredictions() {
           if (match.rap !== p.meta.lastKnownRap) {
             result = match.rap > p.meta.lastKnownRap ? "Higher" : "Lower";
           } else {
-            stillActive.push(p); // keep if no RAP change yet
+            stillActive.push(p);
             continue;
           }
         }
@@ -244,39 +278,30 @@ async function resolvePredictions() {
   saveActive(activePredictions);
 }
 
-// === BUILDER (no repeats) ===
-// === BUILDER (no repeats, no placeholders) ===
+// === BUILDER ===
 async function buildPredictions() {
   const newPredictions = [];
   const now = Date.now();
 
-  // --- SPORTS ---
+  // SPORTS
   try {
     const nflEvents = await fetchNFLEvents();
     const nflPreds = buildNFLPredictions(nflEvents).slice(0, 7);
-    if (nflPreds.length > 0) {
-      newPredictions.push(...nflPreds);
-    } else {
-      console.log("⚠️ No NFL predictions built (no upcoming games)");
-    }
+    newPredictions.push(...nflPreds);
   } catch (err) {
     console.warn("NFL fetch failed:", err.message);
   }
 
-  // --- ROBLOX ---
+  // ROBLOX
   try {
     const items = await fetchHighDemandItems();
     const robloxPreds = buildRobloxPredictions(items).slice(0, 7);
-    if (robloxPreds.length > 0) {
-      newPredictions.push(...robloxPreds);
-    } else {
-      console.log("⚠️ No Roblox high-demand items found");
-    }
+    newPredictions.push(...robloxPreds);
   } catch (err) {
     console.warn("Roblox build failed:", err.message);
   }
 
-  // --- WEATHER ---
+  // WEATHER
   const weatherCities = (process.env.WEATHER_CITY || "Los Angeles,London,Tokyo")
     .split(",")
     .map((c) => c.trim());
@@ -286,11 +311,9 @@ async function buildPredictions() {
     if (data) chosenCities.push({ city, data });
   }
   const weatherPreds = buildWeatherPredictions(chosenCities);
-  if (weatherPreds.length > 0) {
-    newPredictions.push(...weatherPreds);
-  }
+  newPredictions.push(...weatherPreds);
 
-  // --- Attach IDs ---
+  // Attach IDs
   const prepared = newPredictions.map((p) => {
     if (!p.id) {
       p.id = nextPredictionId++;
@@ -300,10 +323,8 @@ async function buildPredictions() {
     return p;
   });
 
-  // ✅ Deduplicate across existing + new
+  // Deduplicate + limit
   const merged = dedupePredictions([...activePredictions, ...prepared]);
-
-  // ✅ Limit to 20 max
   activePredictions = merged.slice(0, 20);
 
   saveActive(activePredictions);
@@ -325,7 +346,6 @@ async function refreshPredictions() {
 
 setInterval(refreshPredictions, 5 * 60 * 1000);
 
-// ✅ Only build if we have no saved predictions
 if (activePredictions.length < 20) {
   await buildPredictions();
 } else {
