@@ -121,10 +121,11 @@ export function loadResolved(limit = 20) {
 
 // === Bets ===
 export function saveBet(bet) {
-  db.prepare(`
+  const info = db.prepare(`
     INSERT INTO bets (userId, username, predictionId, choice, amount)
     VALUES (?, ?, ?, ?, ?)
   `).run(bet.userId, bet.username, bet.predictionId, bet.choice, bet.amount);
+  return info.lastInsertRowid; // ✅ return new bet ID
 }
 
 export function getBetsByPrediction(predictionId) {
@@ -137,4 +138,5 @@ export function markBetsPaid(betIds) {
     for (const id of ids) stmt.run(id);
   });
   tx(betIds);
+}
 }
