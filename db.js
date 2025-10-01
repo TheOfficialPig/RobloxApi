@@ -1,4 +1,3 @@
-// db.js
 import Database from "better-sqlite3";
 
 const db = new Database("predictions.db");
@@ -29,6 +28,16 @@ CREATE TABLE IF NOT EXISTS resolved_predictions (
   expires INTEGER,
   meta TEXT,
   result TEXT
+);
+
+CREATE TABLE IF NOT EXISTS bets (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  userId TEXT,
+  username TEXT,
+  predictionId INTEGER,
+  choice TEXT,
+  amount INTEGER,
+  paidOut INTEGER DEFAULT 0
 );
 `);
 
@@ -108,4 +117,24 @@ export function loadResolved(limit = 20) {
       meta: JSON.parse(r.meta),
       result: r.result
     }));
+}
+
+// === Bets ===
+export function saveBet(bet) {
+  db.prepare(`
+    INSERT INTO bets (userId, username, predictionId, choice, amount)
+    VALUES (?, ?, ?, ?, ?)
+  `).run(bet.userId, bet.username, bet.predictionId, bet.choice, bet.amount);
+}
+
+export function getBetsByPrediction(predictionId) {
+  return db.prepare("SELECT * FROM bets WHERE predictionId = ?").all(predictionId);
+}
+
+export function markBetsPaid(betIds) {
+  const stmt = db.prepare("UPDATE bets SET paidOut = 1 WHERE id = ?");
+  const tx = db.transaction((ids) => {
+    for (const id of ids) stmt.run(id);
+  });
+  tx(betIds);
 }
