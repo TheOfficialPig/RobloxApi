@@ -26,9 +26,10 @@ let activePredictions = loadActive();
 let resolvedPredictions = loadResolved(20);
 
 // global counter for unique IDs
-let nextPredictionId = (activePredictions.length > 0)
-  ? Math.max(...activePredictions.map(p => p.id || 0)) + 1
-  : 1;
+let nextPredictionId =
+  activePredictions.length > 0
+    ? Math.max(...activePredictions.map((p) => p.id || 0)) + 1
+    : 1;
 
 function formatNumber(num) {
   if (num >= 1_000_000) return (num / 1_000_000).toFixed(1).replace(/\.0$/, "") + "M";
@@ -360,27 +361,31 @@ async function buildPredictions() {
   saveActive(activePredictions);
 }
 
-// === REFRESH LOOP ===
-async function refreshPredictions() {
-  await resolvePredictions();
-
-  const now = Date.now();
-  activePredictions = activePredictions.filter(
-    (p) => p.source === "roblox" || p.expires > now
-  );
-
+// === INIT FUNCTION ===
+async function init() {
   if (activePredictions.length < 20) {
     await buildPredictions();
+  } else {
+    console.log(
+      `♻️ Loaded ${activePredictions.length} active predictions from storage`
+    );
   }
+
+  // refresh loop
+  setInterval(refreshPredictions, 5 * 60 * 1000);
+
+  app.listen(PORT, () => {
+    console.log(`Prediction server running on port ${PORT}`);
+    console.log(
+      `📅 NFL Season: ${NFL_SEASON_YEAR} ${NFL_SEASON_TYPE}, Week: ${NFL_WEEK}`
+    );
+  });
 }
 
-setInterval(refreshPredictions, 5 * 60 * 1000);
-
-if (activePredictions.length < 20) {
-  await buildPredictions();
-} else {
-  console.log(`♻️ Loaded ${activePredictions.length} active predictions from storage`);
-}
+init().catch((err) => {
+  console.error("Fatal init error:", err);
+  process.exit(1);
+});
 
 // === ROUTES ===
 app.get("/predictions", (req, res) => {
