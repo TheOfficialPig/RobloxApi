@@ -228,34 +228,55 @@ async function resolvePredictions() {
   const stillActive = [];
 
   for (const p of activePredictions) {
-    if (now < p.expires && p.source !== "roblox") {
+    if (p.source !== "roblox" && now < p.expires) {
       stillActive.push(p);
       continue;
     }
 
     let result = "No Result";
     try {
+      // 🌤 WEATHER
       if (p.source === "weather") {
         const weather = await fetchWeather(p.meta.city);
         if (weather && weather.main) {
           const currentF = (weather.main.temp * 9) / 5 + 32;
           result = currentF > p.meta.target ? "Over" : "Under";
         }
+        // ✅ Weather markets always expire after 24h, no auto-refresh
       }
 
+      // 🟦 ROBLOX
       if (p.source === "roblox") {
         const items = await fetchHighDemandItems();
         const match = items.find((a) => a.assetId === p.meta.assetId);
         if (match) {
           if (match.rap !== p.meta.lastKnownRap) {
+            // Close old market
             result = match.rap > p.meta.lastKnownRap ? "Higher" : "Lower";
+
+            // Open fresh market for updated RAP
+            const rapFormatted = formatNumber(match.rap);
+            const newMarket = {
+              id: nextPredictionId++,
+              source: "roblox",
+              Name: `Will ${match.name} sell for more or less than ${rapFormatted} R$?`,
+              Description: `Current RAP: ${rapFormatted} R$.`,
+              Answer1: `Higher than ${rapFormatted} R$`,
+              Answer2: `Lower than ${rapFormatted} R$`,
+              TimeHours: 9999,
+              created: now,
+              expires: now + 9999 * 60 * 60 * 1000,
+              meta: { assetId: match.assetId, lastKnownRap: match.rap }
+            };
+            stillActive.push(newMarket);
           } else {
-            stillActive.push(p);
+            stillActive.push(p); // RAP unchanged → keep tracking
             continue;
           }
         }
       }
 
+      // 🏈 SPORTS (NFL)
       if (p.source === "sports") {
         const ev = await fetchNFLGameResult(p.meta.eventId);
         if (p.meta.league === "NFL" && ev) {
@@ -266,11 +287,13 @@ async function resolvePredictions() {
             result = total > p.meta.line ? "Over" : "Under";
           }
         }
+        // ✅ NFL markets auto-close once scores are available
       }
     } catch (err) {
       console.warn("Resolve error:", err.message);
     }
 
+    // ✅ Save the closed prediction with its result
     saveResolved({ ...p, result });
   }
 
