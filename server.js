@@ -10,6 +10,12 @@ const PORT = process.env.PORT || 3000;
 const OPENWEATHER_KEY = process.env.OPENWEATHER_KEY;
 const SPORTSDATA_API_KEY = process.env.SPORTSDATA_API_KEY;
 
+// parse JSON bodies
+app.use(express.json());
+
+// Simple in-memory bet store (replace with DB persistence if you have one)
+const bets = [];
+
 // ✅ NFL CONFIG
 const NFL_SEASON_YEAR = process.env.NFL_SEASON_YEAR || "2025";
 const NFL_SEASON_TYPE = process.env.NFL_SEASON_TYPE || "REG"; // REG, POST, PRE
@@ -64,6 +70,7 @@ function dedupePredictions(preds) {
 
 // === HELPERS ===
 async function fetchWeather(city) {
+  if (!OPENWEATHER_KEY) return null;
   const url = `https://api.openweathermap.org/data/2.5/weather?q=${encodeURIComponent(city)}&appid=${OPENWEATHER_KEY}&units=metric`;
   const res = await fetch(url);
   if (!res.ok) return null;
@@ -382,6 +389,81 @@ app.get("/predictions", (req, res) => {
     active: loadActive().slice(0, 20),
     resolved: loadResolved(20)
   });
+});
+
+/**
+ * POST /bet
+ * Expects JSON body:
+ * {
+ *   userId: <number|string>,
+ *   username: <string>,
+ *   predictionId: <number>,
+ *   choice: <string>, // should match Answer1 or Answer2 ideally
+ *   amount: <number>
+ * }
+ *
+ * Responds: { ok: true, message: 'Bet accepted', betId: <id> }
+ */
+app.post("/bet", (req, res) => {
+  try {
+    const { userId, username, predictionId, choice, amount } = req.body || {};
+
+    // Basic validation
+    if (!userId || !username || typeof predictionId === "undefined" || !choice || typeof amount === "undefined") {
+      return res.status(400).json({ ok: false, error: "Missing parameters. Required: userId, username, predictionId, choice, amount" });
+    }
+
+    const parsedPredictionId = Number(predictionId);
+    const parsedAmount = Number(amount);
+
+    if (isNaN(parsedPredictionId) || isNaN(parsedAmount) || parsedAmount <= 0) {
+      return res.status(400).json({ ok: false, error: "Invalid predictionId or amount" });
+    }
+
+    // Check that prediction exists and is active
+    const prediction = (activePredictions.find(p => p.id === parsedPredictionId) || loadActive().find(p => p.id === parsedPredictionId));
+    if (!prediction) {
+      return res.status(404).json({ ok: false, error: "Prediction not found or already closed" });
+    }
+
+    // Optionally validate choice against Answer1/Answer2
+    const validChoices = [];
+    if (prediction.Answer1) validChoices.push(prediction.Answer1);
+    if (prediction.Answer2) validChoices.push(prediction.Answer2);
+    // allow free-form choice too, but warn if it doesn't match
+    if (validChoices.length && !validChoices.includes(choice)) {
+      console.warn(`Player choice "${choice}" didn't match known answers for prediction ${parsedPredictionId}. Known: ${validChoices.join(", ")}`);
+      // not blocking — accept it, but you can change to 400 if you prefer strict checking
+    }
+
+    const newBet = {
+      id: bets.length + 1,
+      userId,
+      username,
+      predictionId: parsedPredictionId,
+      choice,
+      amount: parsedAmount,
+      created: Date.now()
+    };
+
+    // Save in-memory (replace with DB save if desired)
+    bets.push(newBet);
+    console.log("Received bet:", newBet);
+
+    // If you have a DB function, call it here, e.g. saveBet(newBet)
+    // try { await saveBet(newBet); } catch (err) { console.warn("saveBet failed", err); }
+
+    return res.json({ ok: true, message: "Bet accepted", bet: newBet });
+  } catch (err) {
+    console.error("Bet handler error:", err);
+    return res.status(500).json({ ok: false, error: "Internal server error" });
+  }
+});
+
+// Debug route: get recent bets (remove or protect in production)
+app.get("/bets", (req, res) => {
+  const limit = Math.min(50, Number(req.query.limit) || 20);
+  res.json({ ok: true, count: bets.length, bets: bets.slice(-limit).reverse() });
 });
 
 app.listen(PORT, () => {
