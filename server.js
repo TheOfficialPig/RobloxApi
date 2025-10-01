@@ -9,12 +9,13 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 const OPENWEATHER_KEY = process.env.OPENWEATHER_KEY;
 const SPORTSDATA_API_KEY = process.env.SPORTSDATA_API_KEY;
+const ADMIN_KEY = process.env.ADMIN_KEY || "changeme";
 
 // parse JSON bodies
 app.use(express.json());
 
 // Simple in-memory bet store (replace with DB persistence if you have one)
-const bets = [];
+const bets = []; // { id, userId, username, predictionId, choice, amount, created }
 
 // ✅ NFL CONFIG
 const NFL_SEASON_YEAR = process.env.NFL_SEASON_YEAR || "2025";
@@ -22,14 +23,16 @@ const NFL_SEASON_TYPE = process.env.NFL_SEASON_TYPE || "REG"; // REG, POST, PRE
 const NFL_SEASON = `${NFL_SEASON_YEAR}${NFL_SEASON_TYPE}`;
 const NFL_WEEK = parseInt(process.env.NFL_WEEK || "1", 10);
 
-let activePredictions = loadActive();
-let resolvedPredictions = loadResolved(20);
+let activePredictions = loadActive() || [];
+let resolvedPredictions = loadResolved(20) || [];
 
 // global counter for unique IDs
 let nextPredictionId =
   activePredictions.length > 0
     ? Math.max(...activePredictions.map((p) => p.id || 0)) + 1
     : 1;
+
+let nextBetId = 1;
 
 function formatNumber(num) {
   if (num >= 1_000_000) return (num / 1_000_000).toFixed(1).replace(/\.0$/, "") + "M";
@@ -50,7 +53,6 @@ function dedupePredictions(preds) {
     } else if (p.source === "sports") {
       key = `sports-${p.meta.eventId}`;
     } else if (p.source === "weather") {
-      // Near-duplicate filter (within ±5°F for same city)
       const existing = seen.find(
         (k) => k.startsWith(`weather-${p.meta.city}-`) &&
                Math.abs(parseInt(k.split("-").pop()) - p.meta.target) < 5
@@ -230,39 +232,73 @@ function buildNFLPredictions(events) {
   return predictions;
 }
 
+// === MARKET ENRICHMENT (liquidity & implied odds) ===
+function getMarketLiquidity(predictionId, prediction) {
+  const marketBets = bets.filter((b) => b.predictionId === predictionId);
+  const totals = {};
+  if (prediction.Answer1) totals[prediction.Answer1] = 0;
+  if (prediction.Answer2) totals[prediction.Answer2] = 0;
+
+  for (const b of marketBets) {
+    if (!totals[b.choice]) totals[b.choice] = 0;
+    totals[b.choice] += b.amount;
+  }
+
+  const total = Object.values(totals).reduce((s, n) => s + n, 0);
+
+  // implied probabilities: share of liquidity (fallback to 50/50 if no liquidity)
+  const odds = {};
+  if (total === 0) {
+    const choices = Object.keys(totals);
+    const half = 1 / Math.max(choices.length, 2);
+    for (const c of choices) odds[c] = half;
+  } else {
+    for (const [k, v] of Object.entries(totals)) {
+      odds[k] = v / total;
+    }
+  }
+
+  // also compute a simple payout multiplier if a user wins (naive pari-mutuel style)
+  const multipliers = {};
+  for (const [k, v] of Object.entries(totals)) {
+    multipliers[k] = v === 0 ? (total + 1) : (total / (v || 1));
+  }
+
+  return { totals, total, odds, multipliers };
+}
+
 // === RESOLUTION ===
 async function resolvePredictions() {
   const now = Date.now();
-  const stillActive = [];
+  const remaining = [];
 
   for (const p of activePredictions) {
+    // if still not expired (and not Roblox markets which we treat specially), keep
     if (p.source !== "roblox" && now < p.expires) {
-      stillActive.push(p);
+      remaining.push(p);
       continue;
     }
 
     let result = "No Result";
     try {
-      // 🌤 WEATHER
+      // WEATHER
       if (p.source === "weather") {
         const weather = await fetchWeather(p.meta.city);
         if (weather && weather.main) {
           const currentF = (weather.main.temp * 9) / 5 + 32;
           result = currentF > p.meta.target ? "Over" : "Under";
         }
-        // ✅ Weather markets always expire after 24h, no auto-refresh
       }
 
-      // 🟦 ROBLOX
+      // ROBLOX (auto-resolve when RAP changes)
       if (p.source === "roblox") {
         const items = await fetchHighDemandItems();
         const match = items.find((a) => a.assetId === p.meta.assetId);
         if (match) {
           if (match.rap !== p.meta.lastKnownRap) {
-            // Close old market
             result = match.rap > p.meta.lastKnownRap ? "Higher" : "Lower";
 
-            // Open fresh market for updated RAP
+            // open fresh market for updated RAP
             const rapFormatted = formatNumber(match.rap);
             const newMarket = {
               id: nextPredictionId++,
@@ -276,15 +312,19 @@ async function resolvePredictions() {
               expires: now + 9999 * 60 * 60 * 1000,
               meta: { assetId: match.assetId, lastKnownRap: match.rap }
             };
-            stillActive.push(newMarket);
+            remaining.push(newMarket);
           } else {
-            stillActive.push(p); // RAP unchanged → keep tracking
+            // unchanged → keep tracking
+            remaining.push(p);
             continue;
           }
+        } else {
+          // if item disappeared from feed, resolve no result
+          result = "No Result";
         }
       }
 
-      // 🏈 SPORTS (NFL)
+      // SPORTS (NFL)
       if (p.source === "sports") {
         const ev = await fetchNFLGameResult(p.meta.eventId);
         if (p.meta.league === "NFL" && ev) {
@@ -295,17 +335,51 @@ async function resolvePredictions() {
             result = total > p.meta.line ? "Over" : "Under";
           }
         }
-        // ✅ NFL markets auto-close once scores are available
       }
     } catch (err) {
       console.warn("Resolve error:", err.message);
     }
 
-    // ✅ Save the closed prediction with its result
-    saveResolved({ ...p, result });
+    // Gather bets for this market to compute simple payout summary (parimutuel)
+    const marketBets = bets.filter((b) => b.predictionId === p.id);
+    const { totals, total, odds, multipliers } = getMarketLiquidity(p.id, p);
+
+    // Compute winners (simple)
+    const winners = marketBets.filter((b) => {
+      // normalize choice string compare
+      return String(b.choice).toLowerCase() === String(result).toLowerCase();
+    });
+
+    const payoutSummary = {
+      totalLiquidity: total,
+      totals,
+      odds,
+      multipliers,
+      winnerCount: winners.length,
+      winners: winners.map((w) => ({ id: w.id, userId: w.userId, username: w.username, amount: w.amount, choice: w.choice }))
+    };
+
+    const resolvedRecord = {
+      ...p,
+      result,
+      resolvedAt: now,
+      payoutSummary
+    };
+
+    // Save resolved (persist via your db layer)
+    try {
+      saveResolved(resolvedRecord);
+    } catch (err) {
+      console.warn("saveResolved failed:", err.message);
+    }
+
+    // push into resolvedPredictions array for quick read
+    resolvedPredictions.unshift(resolvedRecord);
+    // cap history
+    if (resolvedPredictions.length > 200) resolvedPredictions.length = 200;
   }
 
-  activePredictions = stillActive;
+  activePredictions = remaining;
   saveActive(activePredictions);
 }
 
@@ -361,9 +435,20 @@ async function buildPredictions() {
   saveActive(activePredictions);
 }
 
+// === REFRESH ===
+async function refreshPredictions() {
+  try {
+    await resolvePredictions();
+    await buildPredictions();
+    console.log("♻️ Predictions refreshed");
+  } catch (err) {
+    console.error("Refresh failed:", err);
+  }
+}
+
 // === INIT FUNCTION ===
 async function init() {
-  if (activePredictions.length < 20) {
+  if (!activePredictions || activePredictions.length < 20) {
     await buildPredictions();
   } else {
     console.log(
@@ -371,7 +456,7 @@ async function init() {
     );
   }
 
-  // refresh loop
+  // refresh loop (every 5 minutes)
   setInterval(refreshPredictions, 5 * 60 * 1000);
 
   app.listen(PORT, () => {
@@ -388,32 +473,40 @@ init().catch((err) => {
 });
 
 // === ROUTES ===
+
+// GET /predictions -> enriched active markets (liquidity + implied odds)
 app.get("/predictions", (req, res) => {
-  res.json({
-    ok: true,
-    active: loadActive().slice(0, 20),
-    resolved: loadResolved(20)
-  });
+  try {
+    const enriched = activePredictions.map((p) => {
+      const { totals, total, odds, multipliers } = getMarketLiquidity(p.id, p);
+      return {
+        ...p,
+        liquidity: { totals, total },
+        odds: Object.fromEntries(Object.entries(odds).map(([k, v]) => [k, +(v * 100).toFixed(2)])),
+        multipliers
+      };
+    });
+    res.json({ ok: true, active: enriched, resolved: resolvedPredictions.slice(0, 20) });
+  } catch (err) {
+    console.error("GET /predictions error:", err);
+    res.status(500).json({ ok: false, error: "Internal server error" });
+  }
+});
+
+// GET /resolved -> list of resolved markets
+app.get("/resolved", (req, res) => {
+  const limit = Math.min(50, Number(req.query.limit) || 20);
+  res.json({ ok: true, count: resolvedPredictions.length, resolved: resolvedPredictions.slice(0, limit) });
 });
 
 /**
  * POST /bet
- * Expects JSON body:
- * {
- *   userId: <number|string>,
- *   username: <string>,
- *   predictionId: <number>,
- *   choice: <string>, // should match Answer1 or Answer2 ideally
- *   amount: <number>
- * }
- *
- * Responds: { ok: true, message: 'Bet accepted', betId: <id> }
+ * Body: { userId, username, predictionId, choice, amount }
  */
 app.post("/bet", (req, res) => {
   try {
     const { userId, username, predictionId, choice, amount } = req.body || {};
 
-    // Basic validation
     if (!userId || !username || typeof predictionId === "undefined" || !choice || typeof amount === "undefined") {
       return res.status(400).json({ ok: false, error: "Missing parameters. Required: userId, username, predictionId, choice, amount" });
     }
@@ -425,24 +518,22 @@ app.post("/bet", (req, res) => {
       return res.status(400).json({ ok: false, error: "Invalid predictionId or amount" });
     }
 
-    // Check that prediction exists and is active
-    const prediction = (activePredictions.find(p => p.id === parsedPredictionId) || loadActive().find(p => p.id === parsedPredictionId));
+    const prediction = activePredictions.find(p => p.id === parsedPredictionId);
     if (!prediction) {
       return res.status(404).json({ ok: false, error: "Prediction not found or already closed" });
     }
 
-    // Optionally validate choice against Answer1/Answer2
+    // Optionally validate that choice matches known answers (not required)
     const validChoices = [];
     if (prediction.Answer1) validChoices.push(prediction.Answer1);
     if (prediction.Answer2) validChoices.push(prediction.Answer2);
-    // allow free-form choice too, but warn if it doesn't match
     if (validChoices.length && !validChoices.includes(choice)) {
       console.warn(`Player choice "${choice}" didn't match known answers for prediction ${parsedPredictionId}. Known: ${validChoices.join(", ")}`);
-      // not blocking — accept it, but you can change to 400 if you prefer strict checking
+      // accept anyway to be flexible for custom markets
     }
 
     const newBet = {
-      id: bets.length + 1,
+      id: nextBetId++,
       userId,
       username,
       predictionId: parsedPredictionId,
@@ -451,16 +542,74 @@ app.post("/bet", (req, res) => {
       created: Date.now()
     };
 
-    // Save in-memory (replace with DB save if desired)
     bets.push(newBet);
     console.log("Received bet:", newBet);
 
-    // If you have a DB function, call it here, e.g. saveBet(newBet)
-    // try { await saveBet(newBet); } catch (err) { console.warn("saveBet failed", err); }
+    // return updated market snapshot
+    const { totals, total, odds, multipliers } = getMarketLiquidity(parsedPredictionId, prediction);
+    const enriched = {
+      ...prediction,
+      liquidity: { totals, total },
+      odds: Object.fromEntries(Object.entries(odds).map(([k, v]) => [k, +(v * 100).toFixed(2)])),
+      multipliers
+    };
 
-    return res.json({ ok: true, message: "Bet accepted", bet: newBet });
+    // respond with bet + updated market
+    return res.json({ ok: true, message: "Bet accepted", bet: newBet, market: enriched });
   } catch (err) {
     console.error("Bet handler error:", err);
+    return res.status(500).json({ ok: false, error: "Internal server error" });
+  }
+});
+
+// Admin route: manually resolve a market (for testing). Provide ADMIN_KEY in body.
+app.post("/admin/resolve", (req, res) => {
+  try {
+    const { adminKey, predictionId, result } = req.body || {};
+    if (adminKey !== ADMIN_KEY) return res.status(403).json({ ok: false, error: "Unauthorized" });
+
+    const idx = activePredictions.findIndex(p => p.id === predictionId);
+    if (idx === -1) return res.status(404).json({ ok: false, error: "Prediction not found" });
+
+    const p = activePredictions[idx];
+
+    const resolvedAt = Date.now();
+    const { totals, total, odds, multipliers } = getMarketLiquidity(p.id, p);
+    const marketBets = bets.filter((b) => b.predictionId === p.id);
+    const winners = marketBets.filter((b) => String(b.choice).toLowerCase() === String(result).toLowerCase());
+
+    const payoutSummary = {
+      totalLiquidity: total,
+      totals,
+      odds,
+      multipliers,
+      winnerCount: winners.length,
+      winners: winners.map((w) => ({ id: w.id, userId: w.userId, username: w.username, amount: w.amount, choice: w.choice }))
+    };
+
+    const resolvedRecord = {
+      ...p,
+      result,
+      resolvedAt,
+      payoutSummary
+    };
+
+    // remove from active
+    activePredictions.splice(idx, 1);
+    // push to resolved
+    resolvedPredictions.unshift(resolvedRecord);
+    if (resolvedPredictions.length > 200) resolvedPredictions.length = 200;
+
+    try {
+      saveActive(activePredictions);
+      saveResolved(resolvedRecord);
+    } catch (err) {
+      console.warn("Persist after manual resolve failed:", err.message);
+    }
+
+    return res.json({ ok: true, resolved: resolvedRecord });
+  } catch (err) {
+    console.error("Admin resolve error:", err);
     return res.status(500).json({ ok: false, error: "Internal server error" });
   }
 });
@@ -469,9 +618,4 @@ app.post("/bet", (req, res) => {
 app.get("/bets", (req, res) => {
   const limit = Math.min(50, Number(req.query.limit) || 20);
   res.json({ ok: true, count: bets.length, bets: bets.slice(-limit).reverse() });
-});
-
-app.listen(PORT, () => {
-  console.log(`Prediction server running on port ${PORT}`);
-  console.log(`📅 NFL Season: ${NFL_SEASON_YEAR} ${NFL_SEASON_TYPE}, Week: ${NFL_WEEK}`);
 });
