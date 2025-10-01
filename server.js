@@ -476,7 +476,7 @@ app.get("/resolved", (req, res) => {
  * POST /bet
  * Body: { userId, username, predictionId, choice, amount }
  */
-app.post("/bet", (req, res) => {
+app.post("/bet", async (req, res) => {
   try {
     const { userId, username, predictionId, choice, amount } = req.body || {};
     if (!userId || !username || typeof predictionId === "undefined" || !choice || typeof amount === "undefined") {
@@ -492,20 +492,25 @@ app.post("/bet", (req, res) => {
     const prediction = activePredictions.find(p => p.id === parsedPredictionId);
     if (!prediction) return res.status(404).json({ ok: false, error: "Prediction not found or closed" });
 
-    // persist bet
-    const bet = { userId: String(userId), username: String(username), predictionId: parsedPredictionId, choice: String(choice), amount: parsedAmount };
+    // persist bet and get ID
+    let bet;
     try {
-      saveBet(bet);
+      const betId = saveBet({
+        userId: String(userId),
+        username: String(username),
+        predictionId: parsedPredictionId,
+        choice: String(choice),
+        amount: parsedAmount
+      });
+      bet = { id: betId, userId, username, predictionId: parsedPredictionId, choice, amount: parsedAmount };
     } catch (err) {
       console.warn("saveBet failed:", err.message);
       return res.status(500).json({ ok: false, error: "Failed to save bet" });
     }
 
-    // return updated market snapshot (recompute liquidity)
-    const { totals, total, odds, multipliers } = (async () => await getMarketLiquidityFromDB(prediction))();
-    // Note: getMarketLiquidityFromDB uses getBetsByPrediction synchronously from db.js; if yours is sync, no need for await
+    // recompute market liquidity
+    const { totals, total, odds, multipliers } = await getMarketLiquidityFromDB(prediction);
 
-    // quick enriched view
     const enriched = {
       ...prediction,
       liquidity: { totals, total },
