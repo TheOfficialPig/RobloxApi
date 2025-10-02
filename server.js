@@ -70,12 +70,32 @@ let resolvedMarkets = loadResolvedMarkets(200);
 
 import fs from "fs";
 
+// === Persistence Helpers ===
+function loadActiveMarkets() {
+  try {
+    if (fs.existsSync("activeMarkets.json")) {
+      return JSON.parse(fs.readFileSync("activeMarkets.json", "utf-8"));
+    }
+    return [];
+  } catch (err) {
+    console.error("Failed to load active markets:", err);
+    return [];
+  }
+}
+
+function persistActiveMarkets(markets) {
+  try {
+    fs.writeFileSync("activeMarkets.json", JSON.stringify(markets, null, 2));
+  } catch (err) {
+    console.error("Failed to persist active markets:", err);
+  }
+}
+
 function loadResolvedMarkets(limit = 200) {
   try {
     if (fs.existsSync("resolvedMarkets.json")) {
       let data = JSON.parse(fs.readFileSync("resolvedMarkets.json", "utf-8"));
-      // keep only the latest `limit` markets
-      return data.slice(-limit);
+      return data.slice(-limit); // keep only the latest `limit`
     }
     return [];
   } catch (err) {
@@ -92,24 +112,16 @@ function persistResolvedMarkets(markets) {
   }
 }
 
-function loadActiveMarkets() {
+
+// ensure next id for created markets (use DB autoincrement naturally when saving without id)
+function persistActiveMarkets(markets) {
   try {
-    if (fs.existsSync("activeMarkets.json")) {
-      return JSON.parse(fs.readFileSync("activeMarkets.json", "utf-8"));
-    }
-    return [];
+    fs.writeFileSync("activeMarkets.json", JSON.stringify(markets, null, 2));
   } catch (err) {
-    console.error("Failed to load active markets:", err);
-    return [];
+    console.error("Failed to persist active markets:", err);
   }
 }
 
-// ensure next id for created markets (use DB autoincrement naturally when saving without id)
-function persistActiveMarkets() {
-  for (const m of activeMarkets) {
-    saveMarketRow(m);
-  }
-}
 
 // ----------------------
 // Helpers: format + enrich market
