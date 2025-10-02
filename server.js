@@ -83,13 +83,20 @@ function loadActiveMarkets() {
   }
 }
 
-function persistActiveMarkets(markets) {
+function persistActiveMarkets(markets = activeMarkets) {
   try {
-    fs.writeFileSync("activeMarkets.json", JSON.stringify(markets, null, 2));
+    // coerce to array (avoid writing undefined)
+    const toWrite = Array.isArray(markets) ? markets : (activeMarkets || []);
+    // atomic write: write to temp file then rename
+    const tmp = "activeMarkets.json.tmp";
+    fs.writeFileSync(tmp, JSON.stringify(toWrite, null, 2));
+    fs.renameSync(tmp, "activeMarkets.json");
+    console.log(`Persisted ${toWrite.length} active markets to disk`);
   } catch (err) {
     console.error("Failed to persist active markets:", err);
   }
 }
+
 
 function loadResolvedMarkets(limit = 200) {
   try {
@@ -104,13 +111,18 @@ function loadResolvedMarkets(limit = 200) {
   }
 }
 
-function persistResolvedMarkets(markets) {
+function persistResolvedMarkets(markets = resolvedMarkets) {
   try {
-    fs.writeFileSync("resolvedMarkets.json", JSON.stringify(markets, null, 2));
+    const toWrite = Array.isArray(markets) ? markets : (resolvedMarkets || []);
+    const tmp = "resolvedMarkets.json.tmp";
+    fs.writeFileSync(tmp, JSON.stringify(toWrite, null, 2));
+    fs.renameSync(tmp, "resolvedMarkets.json");
+    console.log(`Persisted ${toWrite.length} resolved markets to disk`);
   } catch (err) {
     console.error("Failed to persist resolved markets:", err);
   }
 }
+
 
 
 // ----------------------
