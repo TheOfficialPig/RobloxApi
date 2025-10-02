@@ -1,22 +1,12 @@
+// db.js
 import Database from "better-sqlite3";
-
 const db = new Database("predictions.db");
 
+// Ensure migrations run (you should run migrations.sql manually or ensure these tables exist)
 db.exec(`
-CREATE TABLE IF NOT EXISTS active_predictions (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  name TEXT,
-  description TEXT,
-  answer1 TEXT,
-  answer2 TEXT,
-  source TEXT,
-  timeHours INTEGER,
-  created INTEGER,
-  expires INTEGER,
-  meta TEXT
-);
+PRAGMA foreign_keys = ON;
 
-CREATE TABLE IF NOT EXISTS resolved_predictions (
+CREATE TABLE IF NOT EXISTS markets (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   name TEXT,
   description TEXT,
@@ -27,7 +17,21 @@ CREATE TABLE IF NOT EXISTS resolved_predictions (
   created INTEGER,
   expires INTEGER,
   meta TEXT,
+  q1 REAL DEFAULT 0,
+  q2 REAL DEFAULT 0,
+  b REAL DEFAULT 50,
+  status TEXT DEFAULT 'open',
   result TEXT
+);
+
+CREATE TABLE IF NOT EXISTS positions (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  userId TEXT,
+  username TEXT,
+  marketId INTEGER,
+  side TEXT,
+  shares REAL,
+  UNIQUE(userId, marketId, side)
 );
 
 CREATE TABLE IF NOT EXISTS bets (
@@ -36,39 +40,49 @@ CREATE TABLE IF NOT EXISTS bets (
   username TEXT,
   predictionId INTEGER,
   choice TEXT,
-  amount INTEGER,
+  amount REAL,
+  shares REAL,
+  type TEXT,
+  timestamp INTEGER,
   paidOut INTEGER DEFAULT 0
 );
 `);
 
-export function saveActive(preds) {
-  db.exec("DELETE FROM active_predictions");
+// Markets
+export function saveMarketRow(m) {
   const stmt = db.prepare(`
-    INSERT INTO active_predictions
-    (name, description, answer1, answer2, source, timeHours, created, expires, meta)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO markets
+    (id, name, description, answer1, answer2, source, timeHours, created, expires, meta, q1, q2, b, status, result)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
-  const insertMany = db.transaction((list) => {
-    for (const p of list) {
-      stmt.run(
-        p.Name,
-        p.Description,
-        p.Answer1,
-        p.Answer2,
-        p.source,
-        p.TimeHours,
-        p.created,
-        p.expires,
-        JSON.stringify(p.meta)
-      );
-    }
+  // If id provided, use INSERT OR REPLACE to persist current state
+  const sql = `
+    INSERT OR REPLACE INTO markets
+    (id, name, description, answer1, answer2, source, timeHours, created, expires, meta, q1, q2, b, status, result)
+    VALUES (@id, @name, @description, @answer1, @answer2, @source, @timeHours, @created, @expires, @meta, @q1, @q2, @b, @status, @result)
+  `;
+  db.prepare(sql).run({
+    id: m.id,
+    name: m.Name || m.name,
+    description: m.Description || m.description,
+    answer1: m.Answer1,
+    answer2: m.Answer2,
+    source: m.source,
+    timeHours: m.TimeHours || m.timeHours,
+    created: m.created,
+    expires: m.expires,
+    meta: JSON.stringify(m.meta || {}),
+    q1: m.q1 || 0,
+    q2: m.q2 || 0,
+    b: m.b || 50,
+    status: m.status || 'open',
+    result: m.result || null
   });
-  insertMany(preds);
 }
 
-export function loadActive() {
-  return db.prepare("SELECT * FROM active_predictions").all().map((r) => ({
-    ...r,
+export function loadActiveMarkets() {
+  return db.prepare("SELECT * FROM markets WHERE status = 'open' ORDER BY id ASC").all().map(r => ({
+    id: r.id,
     Name: r.name,
     Description: r.description,
     Answer1: r.answer1,
@@ -77,61 +91,85 @@ export function loadActive() {
     TimeHours: r.timeHours,
     created: r.created,
     expires: r.expires,
-    meta: JSON.parse(r.meta)
+    meta: JSON.parse(r.meta || "{}"),
+    q1: r.q1,
+    q2: r.q2,
+    b: r.b,
+    status: r.status,
+    result: r.result
   }));
 }
 
-export function saveResolved(p) {
-  db.prepare(`
-    INSERT INTO resolved_predictions
-    (name, description, answer1, answer2, source, timeHours, created, expires, meta, result)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `).run(
-    p.Name,
-    p.Description,
-    p.Answer1,
-    p.Answer2,
-    p.source,
-    p.TimeHours,
-    p.created,
-    p.expires,
-    JSON.stringify(p.meta),
-    p.result
-  );
+export function loadResolvedMarkets(limit = 50) {
+  return db.prepare("SELECT * FROM markets WHERE status = 'resolved' ORDER BY id DESC LIMIT ?").all(limit).map(r => ({
+    id: r.id,
+    Name: r.name,
+    Description: r.description,
+    Answer1: r.answer1,
+    Answer2: r.answer2,
+    source: r.source,
+    TimeHours: r.timeHours,
+    created: r.created,
+    expires: r.expires,
+    meta: JSON.parse(r.meta || "{}"),
+    q1: r.q1,
+    q2: r.q2,
+    b: r.b,
+    status: r.status,
+    result: r.result
+  }));
 }
 
-export function loadResolved(limit = 20) {
-  return db
-    .prepare("SELECT * FROM resolved_predictions ORDER BY id DESC LIMIT ?")
-    .all(limit)
-    .map((r) => ({
-      ...r,
-      Name: r.name,
-      Description: r.description,
-      Answer1: r.answer1,
-      Answer2: r.answer2,
-      source: r.source,
-      TimeHours: r.timeHours,
-      created: r.created,
-      expires: r.expires,
-      meta: JSON.parse(r.meta),
-      result: r.result
-    }));
+// Position helpers
+export function upsertPosition({ userId, username, marketId, side, additionalShares }) {
+  const existing = db.prepare("SELECT * FROM positions WHERE userId = ? AND marketId = ? AND side = ?").get(userId, marketId, side);
+  if (existing) {
+    db.prepare("UPDATE positions SET shares = shares + ?, username = ? WHERE id = ?").run(additionalShares, username, existing.id);
+    return existing.id;
+  } else {
+    const info = db.prepare("INSERT INTO positions (userId, username, marketId, side, shares) VALUES (?, ?, ?, ?, ?)").run(userId, username, marketId, side, additionalShares);
+    return info.lastInsertRowid;
+  }
 }
 
-// === Bets ===
+export function getPosition(userId, marketId, side) {
+  return db.prepare("SELECT * FROM positions WHERE userId = ? AND marketId = ? AND side = ?").get(userId, marketId, side);
+}
+
+export function reducePosition(userId, marketId, side, reduceShares) {
+  const pos = getPosition(userId, marketId, side);
+  if (!pos) return false;
+  const newShares = Math.max(0, pos.shares - reduceShares);
+  if (newShares === 0) {
+    db.prepare("DELETE FROM positions WHERE id = ?").run(pos.id);
+  } else {
+    db.prepare("UPDATE positions SET shares = ? WHERE id = ?").run(newShares, pos.id);
+  }
+  return true;
+}
+
+export function getPositionsByMarket(marketId) {
+  return db.prepare("SELECT * FROM positions WHERE marketId = ?").all(marketId);
+}
+
+// Bets/trade log
 export function saveBet(bet) {
   const info = db.prepare(`
-    INSERT INTO bets (userId, username, predictionId, choice, amount)
-    VALUES (?, ?, ?, ?, ?)
-  `).run(bet.userId, bet.username, bet.predictionId, bet.choice, bet.amount);
-  return info.lastInsertRowid; // ✅ return new bet ID
+    INSERT INTO bets (userId, username, predictionId, choice, amount, shares, type, timestamp)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(bet.userId, bet.username, bet.predictionId, bet.choice, bet.amount, bet.shares, bet.type, bet.timestamp || Date.now());
+  return info.lastInsertRowid;
 }
 
 export function getBetsByPrediction(predictionId) {
-  return db.prepare("SELECT * FROM bets WHERE predictionId = ?").all(predictionId);
+  return db.prepare("SELECT * FROM bets WHERE predictionId = ? ORDER BY id DESC").all(predictionId);
 }
 
+export function getRecentBets(predictionId, limit = 10) {
+  return db.prepare("SELECT username, type, amount, shares, choice, timestamp FROM bets WHERE predictionId = ? ORDER BY id DESC LIMIT ?").all(predictionId, limit);
+}
+
+// Mark bets paid (if used)
 export function markBetsPaid(betIds) {
   const stmt = db.prepare("UPDATE bets SET paidOut = 1 WHERE id = ?");
   const tx = db.transaction((ids) => {
@@ -139,4 +177,6 @@ export function markBetsPaid(betIds) {
   });
   tx(betIds);
 }
-}
+
+// Export db for ad-hoc queries if needed
+export { db };
