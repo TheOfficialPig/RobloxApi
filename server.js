@@ -78,69 +78,6 @@ function amountForSell(q1, q2, b, side, shares) {
 }
 
 // ----------------------
-// In-memory caches (loaded from DB at start)
-// ----------------------
-let activeMarkets = loadActiveMarkets();
-let resolvedMarkets = loadResolvedMarkets(200);
-
-import fs from "fs";
-
-// === Persistence Helpers ===
-function loadActiveMarkets() {
-  try {
-    if (fs.existsSync("activeMarkets.json")) {
-      return JSON.parse(fs.readFileSync("activeMarkets.json", "utf-8"));
-    }
-    return [];
-  } catch (err) {
-    console.error("Failed to load active markets:", err);
-    return [];
-  }
-}
-
-function persistActiveMarkets(markets = activeMarkets) {
-  try {
-    // coerce to array (avoid writing undefined)
-    const toWrite = Array.isArray(markets) ? markets : (activeMarkets || []);
-    // atomic write: write to temp file then rename
-    const tmp = "activeMarkets.json.tmp";
-    fs.writeFileSync(tmp, JSON.stringify(toWrite, null, 2));
-    fs.renameSync(tmp, "activeMarkets.json");
-    console.log(`Persisted ${toWrite.length} active markets to disk`);
-  } catch (err) {
-    console.error("Failed to persist active markets:", err);
-  }
-}
-
-
-function loadResolvedMarkets(limit = 200) {
-  try {
-    if (fs.existsSync("resolvedMarkets.json")) {
-      let data = JSON.parse(fs.readFileSync("resolvedMarkets.json", "utf-8"));
-      return data.slice(-limit); // keep only the latest `limit`
-    }
-    return [];
-  } catch (err) {
-    console.error("Failed to load resolved markets:", err);
-    return [];
-  }
-}
-
-function persistResolvedMarkets(markets = resolvedMarkets) {
-  try {
-    const toWrite = Array.isArray(markets) ? markets : (resolvedMarkets || []);
-    const tmp = "resolvedMarkets.json.tmp";
-    fs.writeFileSync(tmp, JSON.stringify(toWrite, null, 2));
-    fs.renameSync(tmp, "resolvedMarkets.json");
-    console.log(`Persisted ${toWrite.length} resolved markets to disk`);
-  } catch (err) {
-    console.error("Failed to persist resolved markets:", err);
-  }
-}
-
-
-
-// ----------------------
 // Helpers: format + enrich market
 // ----------------------
 function formatNumber(num) {
