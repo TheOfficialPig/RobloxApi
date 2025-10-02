@@ -15,6 +15,21 @@ const SPORTSDATA_API_KEY = process.env.SPORTSDATA_API_KEY || "";
 const ROLIMONS_URL = "https://api.rolimons.com/items/v1/itemdetails"; // public-ish
 const WEATHER_CITIES = (process.env.WEATHER_CITY || "Los Angeles,London,Tokyo,New York,Chicago").split(",").map(s=>s.trim());
 
+// server.js
+import {
+  saveMarketRow,
+  loadActiveMarkets,
+  loadResolvedMarkets,
+  saveBet,
+  getBetsByPrediction,
+  getRecentBets,
+  upsertPosition,
+  getPosition,
+  reducePosition,
+  getPositionsByMarket,
+  markBetsPaid
+} from "./db.js";
+
 // ----------------------
 // LMSR market math
 // ----------------------
