@@ -68,6 +68,20 @@ function amountForSell(q1, q2, b, side, shares) {
 let activeMarkets = loadActiveMarkets();
 let resolvedMarkets = loadResolvedMarkets(200);
 
+import fs from "fs";
+
+function loadActiveMarkets() {
+  try {
+    if (fs.existsSync("activeMarkets.json")) {
+      return JSON.parse(fs.readFileSync("activeMarkets.json", "utf-8"));
+    }
+    return [];
+  } catch (err) {
+    console.error("Failed to load active markets:", err);
+    return [];
+  }
+}
+
 // ensure next id for created markets (use DB autoincrement naturally when saving without id)
 function persistActiveMarkets() {
   for (const m of activeMarkets) {
