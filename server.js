@@ -70,6 +70,31 @@ let resolvedMarkets = loadResolvedMarkets(200);
 
 import fs from "fs";
 
+function loadResolvedMarkets(limit = 200) {
+  try {
+    if (fs.existsSync("resolvedMarkets.json")) {
+      let data = JSON.parse(fs.readFileSync("resolvedMarkets.json", "utf-8"));
+      // keep only the latest `limit` markets
+      return data.slice(-limit);
+    }
+    return [];
+  } catch (err) {
+    console.error("Failed to load resolved markets:", err);
+    return [];
+  }
+}
+
+function persistResolvedMarkets(markets) {
+  try {
+    fs.writeFileSync("resolvedMarkets.json", JSON.stringify(markets, null, 2));
+  } catch (err) {
+    console.error("Failed to persist resolved markets:", err);
+  }
+}
+
+
+import fs from "fs";
+
 function loadActiveMarkets() {
   try {
     if (fs.existsSync("activeMarkets.json")) {
