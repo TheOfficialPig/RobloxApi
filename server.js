@@ -113,16 +113,6 @@ function persistResolvedMarkets(markets) {
 }
 
 
-// ensure next id for created markets (use DB autoincrement naturally when saving without id)
-function persistActiveMarkets(markets) {
-  try {
-    fs.writeFileSync("activeMarkets.json", JSON.stringify(markets, null, 2));
-  } catch (err) {
-    console.error("Failed to persist active markets:", err);
-  }
-}
-
-
 // ----------------------
 // Helpers: format + enrich market
 // ----------------------
