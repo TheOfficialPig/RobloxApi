@@ -92,9 +92,6 @@ function persistResolvedMarkets(markets) {
   }
 }
 
-
-import fs from "fs";
-
 function loadActiveMarkets() {
   try {
     if (fs.existsSync("activeMarkets.json")) {
