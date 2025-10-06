@@ -5,106 +5,74 @@ dotenv.config();
 
 const app = express();
 const PORT = process.env.PORT || 3000;
-const API_KEY = process.env.SPORTRADAR_API_KEY;
 
-const LEAGUES = [
-  { id: "nfl", path: "nfl/official/trial/v7/en" },
-  { id: "nba", path: "nba/trial/v8/en" },
-  { id: "mlb", path: "mlb/trial/v7/en" },
-  { id: "nhl", path: "nhl/trial/v7/en" },
-];
+// SportsRadar trial base URLs (adjust if you have premium endpoints)
+const LEAGUE_ENDPOINTS = {
+  NFL: `https://api.sportradar.us/nfl/official/trial/v7/en/games`,
+  NBA: `https://api.sportradar.us/nba/trial/v8/en/games`,
+  NHL: `https://api.sportradar.us/nhl/trial/v7/en/games`,
+  MLB: `https://api.sportradar.us/mlb/trial/v7/en/games`,
+};
 
-app.get("/matches", async (req, res) => {
-  try {
-    const allMatches = [];
+const API_KEY = process.env.SPORTRADAR_KEY;
 
-    for (const league of LEAGUES) {
-      const scheduleUrl = `https://api.sportradar.us/${league.path}/games/2025/REG/schedule.json?api_key=${API_KEY}`;
-      const scheduleRes = await fetch(scheduleUrl);
-      if (!scheduleRes.ok) continue;
-      const schedule = await scheduleRes.json();
+// 🗓️ Helper: build date range (today + 14 days)
+function getDateRange() {
+  const today = new Date();
+  const end = new Date();
+  end.setDate(today.getDate() + 14);
 
-      if (!schedule.weeks && !schedule.games) continue;
+  const format = d => d.toISOString().split("T")[0];
+  return { start: format(today), end: format(end) };
+}
 
-      const games = schedule.games || schedule.weeks?.flatMap(w => w.games) || [];
+// 🧠 Get games for all leagues within date range
+async function getUpcomingGames() {
+  const { start, end } = getDateRange();
+  const allMatches = [];
 
-      for (const game of games) {
-        const homeTeam = game.home || game.home_team || {};
-        const awayTeam = game.away || game.away_team || {};
+  for (const [league, baseUrl] of Object.entries(LEAGUE_ENDPOINTS)) {
+    try {
+      const url = `${baseUrl}/${start}/${end}/schedule.json?api_key=${API_KEY}`;
+      const res = await fetch(url);
 
-        // --- Fetch team stats ---
-        const statsUrlHome = `https://api.sportradar.us/${league.path}/teams/${homeTeam.id}/profile.json?api_key=${API_KEY}`;
-        const statsUrlAway = `https://api.sportradar.us/${league.path}/teams/${awayTeam.id}/profile.json?api_key=${API_KEY}`;
-        const [homeStatsRes, awayStatsRes] = await Promise.all([
-          fetch(statsUrlHome),
-          fetch(statsUrlAway),
-        ]);
+      if (!res.ok) {
+        console.error(`❌ ${league} error: ${res.status}`);
+        continue;
+      }
 
-        const homeStats = homeStatsRes.ok ? await homeStatsRes.json() : {};
-        const awayStats = awayStatsRes.ok ? await awayStatsRes.json() : {};
+      const data = await res.json();
+      if (!data.games) continue;
 
-        // --- Odds API (if available) ---
-        const oddsUrl = `https://api.sportradar.us/${league.path}/oddscomparison/2025/REG/schedule.json?api_key=${API_KEY}`;
-        const oddsRes = await fetch(oddsUrl);
-        const oddsData = oddsRes.ok ? await oddsRes.json() : {};
-        const oddsGame = oddsData?.games?.find(g => g.id === game.id);
-
-        // --- Calculate winChance ---
-        const homeWinPct =
-          homeStats.record?.overall?.win_pct ??
-          homeStats.statistics?.wins / (homeStats.statistics?.wins + homeStats.statistics?.losses) ??
-          0.5;
-        const awayWinPct =
-          awayStats.record?.overall?.win_pct ??
-          awayStats.statistics?.wins / (awayStats.statistics?.wins + awayStats.statistics?.losses) ??
-          0.5;
-
-        const total = homeWinPct + awayWinPct;
-        const homeChance = total ? homeWinPct / total : 0.5;
-        const awayChance = total ? awayWinPct / total : 0.5;
-
-        const homeMultiplier = (1 / homeChance) * 0.97; // small house edge
-        const awayMultiplier = (1 / awayChance) * 0.97;
-
+      for (const g of data.games) {
         allMatches.push({
-          MatchID: game.id,
-          League: league.id.toUpperCase(),
-          Scheduled: game.scheduled,
-          Venue: game.venue?.name ?? "TBD",
-          Status: game.status ?? "scheduled",
+          MatchID: g.id,
+          League: league,
+          Scheduled: g.scheduled,
+          Status: g.status,
+          Venue: g.venue?.name || "Unknown",
           HomeTeam: {
-            id: homeTeam.id,
-            name: homeTeam.name,
-            wins: homeStats.statistics?.wins ?? 0,
-            losses: homeStats.statistics?.losses ?? 0,
-            winPct: homeWinPct,
-            avgPoints: homeStats.statistics?.points_per_game ?? null,
-            passingYards: homeStats.statistics?.passing_yards_per_game ?? null,
-            rushingYards: homeStats.statistics?.rushing_yards_per_game ?? null,
-            winChance: homeChance,
-            multiplier: homeMultiplier,
+            id: g.home?.id,
+            name: g.home?.name,
           },
           AwayTeam: {
-            id: awayTeam.id,
-            name: awayTeam.name,
-            wins: awayStats.statistics?.wins ?? 0,
-            losses: awayStats.statistics?.losses ?? 0,
-            winPct: awayWinPct,
-            avgPoints: awayStats.statistics?.points_per_game ?? null,
-            passingYards: awayStats.statistics?.passing_yards_per_game ?? null,
-            rushingYards: awayStats.statistics?.rushing_yards_per_game ?? null,
-            winChance: awayChance,
-            multiplier: awayMultiplier,
+            id: g.away?.id,
+            name: g.away?.name,
           },
         });
       }
+    } catch (err) {
+      console.error(`⚠️ ${league} fetch failed:`, err.message);
     }
-
-    res.json(allMatches);
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: "Failed to fetch data" });
   }
+
+  return allMatches;
+}
+
+// 🧩 Route: Get next 14 days of matches
+app.get("/matches", async (req, res) => {
+  const matches = await getUpcomingGames();
+  res.json(matches);
 });
 
-app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+app.listen(PORT, () => console.log(`✅ Server running on port ${PORT}`));
