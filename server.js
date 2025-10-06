@@ -4,6 +4,7 @@ import fetch from "node-fetch";
 import dotenv from "dotenv";
 dotenv.config();
 
+
 const app = express();
 const PORT = process.env.PORT || 3000;
 const API_KEY = process.env.ODDS_API_KEY || "f547eaaf9d81defdd53c829deee7fd41";
