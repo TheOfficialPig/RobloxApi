@@ -1,4 +1,3 @@
-// server.js
 import express from "express";
 import fetch from "node-fetch";
 import dotenv from "dotenv";
@@ -17,6 +16,8 @@ const LEAGUES = [
 
 const BASE_URL = "https://api.the-odds-api.com/v4/sports";
 const DAYS_AHEAD = 14;
+const CACHE_TTL = 20 * 60 * 3000; // 20 minutes
+let cache = {}; // { leagueId: { data, lastFetch } }
 
 // --- Helpers ---
 function dateWithinRange(dateStr) {
@@ -26,26 +27,31 @@ function dateWithinRange(dateStr) {
   return diff >= 0 && diff <= DAYS_AHEAD;
 }
 
-// Correct decimal odds → implied probability
 function computeWinChance(decimalOdds) {
   if (!decimalOdds || decimalOdds <= 1) return 0.5;
   return 1 / decimalOdds;
 }
 
-// Multiplier = real odds * small fairness adjustment
 function computeMultiplier(decimalOdds) {
   if (!decimalOdds) return 1.1;
-  return Math.max(1.1, Math.min(3.5, decimalOdds * 0.97)); // 3% edge
+  return Math.max(1.1, Math.min(3.5, decimalOdds * 0.97));
 }
 
-// --- Fetching real data ---
+// --- API fetch + cache ---
 async function fetchMatches(league) {
+  const cached = cache[league.id];
+  const now = Date.now();
+  if (cached && now - cached.lastFetch < CACHE_TTL) {
+    console.log(`♻️ Using cached ${league.id.toUpperCase()} (${cached.data.length} games)`);
+    return cached.data;
+  }
+
   try {
     const url = `${BASE_URL}/${league.api}/odds/?apiKey=${API_KEY}&regions=us&markets=h2h&oddsFormat=decimal`;
     const res = await fetch(url);
     if (!res.ok) {
       console.log(`❌ ${league.id.toUpperCase()} error: ${res.status}`);
-      return [];
+      return cached?.data || [];
     }
 
     const data = await res.json();
@@ -61,11 +67,7 @@ async function fetchMatches(league) {
 
         const homeChance = computeWinChance(homeOdds);
         const awayChance = computeWinChance(awayOdds);
-
-        // Normalize so total chance = 1.0
-        const totalChance = homeChance + awayChance;
-        const normHome = homeChance / totalChance;
-        const normAway = awayChance / totalChance;
+        const total = homeChance + awayChance;
 
         return {
           MatchID: game.id,
@@ -76,24 +78,25 @@ async function fetchMatches(league) {
           HomeTeam: {
             name: home,
             odds: homeOdds,
-            winChance: normHome,
+            winChance: homeChance / total,
             multiplier: computeMultiplier(homeOdds),
           },
           AwayTeam: {
             name: away,
             odds: awayOdds,
-            winChance: normAway,
+            winChance: awayChance / total,
             multiplier: computeMultiplier(awayOdds),
           },
           Winner: game.completed ? game.scores?.find(s => s.winner)?.name ?? null : null,
         };
       });
 
-    console.log(`✅ ${league.id.toUpperCase()} pulled ${matches.length} games`);
+    console.log(`✅ ${league.id.toUpperCase()} fetched ${matches.length} games`);
+    cache[league.id] = { data: matches, lastFetch: now };
     return matches;
   } catch (err) {
     console.error(`❌ ${league.id.toUpperCase()} fetch error:`, err);
-    return [];
+    return cached?.data || [];
   }
 }
 
