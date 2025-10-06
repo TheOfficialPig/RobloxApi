@@ -147,14 +147,14 @@ async function fetchTeamStats(league, teamId, teamName, sampleMatch) {
         }
       }
 
-      // 3) profile shapes
-      const profile = safeGet(j, "team") || safeGet(j, "profile") || j;
-      if (profile) {
-        stats.name = stats.name ?? (profile.name || profile.full_name || profile.display_name);
-        // try typical keys
-        stats.wins = stats.wins ?? (profile.wins ?? profile.season && profile.season.wins);
-        stats.losses = stats.losses ?? (profile.losses ?? profile.season && profile.season.losses);
-      }
+// 3) profile shapes
+const profile = safeGet(j, "team") || safeGet(j, "profile") || j;
+if (profile) {
+  stats.name = stats.name ?? (profile.name || profile.full_name || profile.display_name);
+  // wrap with parentheses for correct precedence
+  stats.wins = stats.wins ?? (profile.wins ?? (profile.season && profile.season.wins));
+  stats.losses = stats.losses ?? (profile.losses ?? (profile.season && profile.season.losses));
+}
 
       // If we got meaningful data break early
       if (stats.wins !== null || stats.avgPoints !== null) break;
