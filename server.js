@@ -4,7 +4,6 @@ import fetch from "node-fetch";
 import dotenv from "dotenv";
 dotenv.config();
 
-
 const app = express();
 const PORT = process.env.PORT || 3000;
 const API_KEY = process.env.ODDS_API_KEY || "f547eaaf9d81defdd53c829deee7fd41";
@@ -19,6 +18,7 @@ const LEAGUES = [
 const BASE_URL = "https://api.the-odds-api.com/v4/sports";
 const DAYS_AHEAD = 14;
 
+// --- Helpers ---
 function dateWithinRange(dateStr) {
   const now = new Date();
   const date = new Date(dateStr);
@@ -26,16 +26,19 @@ function dateWithinRange(dateStr) {
   return diff >= 0 && diff <= DAYS_AHEAD;
 }
 
-function computeWinChance(odds) {
-  if (!odds) return 0.5;
-  return 1 / (odds / 100 + 1);
+// Correct decimal odds → implied probability
+function computeWinChance(decimalOdds) {
+  if (!decimalOdds || decimalOdds <= 1) return 0.5;
+  return 1 / decimalOdds;
 }
 
-function computeMultiplier(winChance) {
-  const multiplier = (1 / winChance) * 0.97; // small edge
-  return Math.max(1.1, Math.min(3.5, multiplier));
+// Multiplier = real odds * small fairness adjustment
+function computeMultiplier(decimalOdds) {
+  if (!decimalOdds) return 1.1;
+  return Math.max(1.1, Math.min(3.5, decimalOdds * 0.97)); // 3% edge
 }
 
+// --- Fetching real data ---
 async function fetchMatches(league) {
   try {
     const url = `${BASE_URL}/${league.api}/odds/?apiKey=${API_KEY}&regions=us&markets=h2h&oddsFormat=decimal`;
@@ -46,8 +49,6 @@ async function fetchMatches(league) {
     }
 
     const data = await res.json();
-    const now = new Date();
-
     const matches = data
       .filter(m => m.commence_time && dateWithinRange(m.commence_time))
       .map(game => {
@@ -61,6 +62,11 @@ async function fetchMatches(league) {
         const homeChance = computeWinChance(homeOdds);
         const awayChance = computeWinChance(awayOdds);
 
+        // Normalize so total chance = 1.0
+        const totalChance = homeChance + awayChance;
+        const normHome = homeChance / totalChance;
+        const normAway = awayChance / totalChance;
+
         return {
           MatchID: game.id,
           League: league.id.toUpperCase(),
@@ -70,14 +76,14 @@ async function fetchMatches(league) {
           HomeTeam: {
             name: home,
             odds: homeOdds,
-            winChance: homeChance,
-            multiplier: computeMultiplier(homeChance),
+            winChance: normHome,
+            multiplier: computeMultiplier(homeOdds),
           },
           AwayTeam: {
             name: away,
             odds: awayOdds,
-            winChance: awayChance,
-            multiplier: computeMultiplier(awayChance),
+            winChance: normAway,
+            multiplier: computeMultiplier(awayOdds),
           },
           Winner: game.completed ? game.scores?.find(s => s.winner)?.name ?? null : null,
         };
@@ -91,7 +97,7 @@ async function fetchMatches(league) {
   }
 }
 
-// Route for Roblox
+// --- Routes ---
 app.get("/getMatches/:league", async (req, res) => {
   const league = LEAGUES.find(l => l.id === req.params.league.toLowerCase());
   if (!league) return res.status(400).json({ error: "Invalid league" });
@@ -100,7 +106,6 @@ app.get("/getMatches/:league", async (req, res) => {
   res.json({ matches });
 });
 
-// Poll all
 app.get("/getAllMatches", async (req, res) => {
   const results = {};
   for (const league of LEAGUES) {
