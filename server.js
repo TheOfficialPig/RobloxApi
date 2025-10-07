@@ -40,25 +40,26 @@ async function fetchMatches(league) {
   }
 
   try {
-    const url = `${BASE_URL}/${league.api}/odds/?apiKey=${API_KEY}&regions=us&markets=h2h&oddsFormat=decimal`;
-    const res = await fetch(url);
-    if (!res.ok) {
-      console.log(`❌ ${league.id.toUpperCase()} error: ${res.status}`);
+    // === 1️⃣ Fetch upcoming + live odds ===
+    const oddsUrl = `${BASE_URL}/${league.api}/odds/?apiKey=${API_KEY}&regions=us&markets=h2h&oddsFormat=decimal`;
+    const oddsRes = await fetch(oddsUrl);
+    if (!oddsRes.ok) {
+      console.log(`❌ ${league.id.toUpperCase()} odds error: ${oddsRes.status}`);
       return cached?.data || [];
     }
+    const oddsData = await oddsRes.json();
 
-    const data = await res.json();
-    const matches = data
+    // === 2️⃣ Fetch recently completed scores (last 2 days) ===
+    const scoresUrl = `${BASE_URL}/${league.api}/scores/?apiKey=${API_KEY}&daysFrom=${DAYS_BACK_COMPLETED}`;
+    const scoreRes = await fetch(scoresUrl);
+    const scoreData = scoreRes.ok ? await scoreRes.json() : [];
+
+    // === 3️⃣ Normalize upcoming/live matches ===
+    const matches = oddsData
       .filter(game => {
         const start = new Date(game.commence_time);
-        const diffAhead = (start - now) / (1000 * 60 * 60 * 24); // days ahead
-        const diffBack = (now - start) / (1000 * 60 * 60 * 24);  // days back
-
-        const isLive = !game.completed && start <= now;
-        const isUpcoming = diffAhead >= 0 && diffAhead <= DAYS_AHEAD;
-        const isRecentCompleted = game.completed && diffBack <= DAYS_BACK_COMPLETED;
-
-        return isLive || isUpcoming || isRecentCompleted;
+        const diffAhead = (start - now) / (1000 * 60 * 60 * 24);
+        return diffAhead >= -0.5 && diffAhead <= DAYS_AHEAD; // include small overlap
       })
       .map(game => {
         const home = game.home_team || "Home";
@@ -72,7 +73,6 @@ async function fetchMatches(league) {
         const awayChance = computeWinChance(awayOdds);
         const total = homeChance + awayChance;
 
-        // Determine status
         const start = new Date(game.commence_time);
         const status = game.completed
           ? "completed"
@@ -102,9 +102,33 @@ async function fetchMatches(league) {
         };
       });
 
+    // === 4️⃣ Merge in recently completed games (from /scores) ===
+    for (const game of scoreData) {
+      if (game.completed && !matches.find(m => m.MatchID === game.id)) {
+        const home = game.home_team || "Home";
+        const away = game.away_team || "Away";
+        const winner =
+          game.scores?.find(s => s.winner)?.name ||
+          (game.scores?.[0]?.score > game.scores?.[1]?.score ? home : away);
+
+        matches.push({
+          MatchID: game.id,
+          League: league.id.toUpperCase(),
+          Scheduled: game.commence_time,
+          Status: "completed",
+          Venue: game.venue || "TBD",
+          HomeTeam: { name: home, odds: 2.0, multiplier: 1.1 },
+          AwayTeam: { name: away, odds: 2.0, multiplier: 1.1 },
+          Winner: winner,
+        });
+      }
+    }
+
+    // === 5️⃣ Save + cache result ===
     console.log(`✅ ${league.id.toUpperCase()} fetched ${matches.length} games`);
     cache[league.id] = { data: matches, lastFetch: now };
     return matches;
+
   } catch (err) {
     console.error(`❌ ${league.id.toUpperCase()} fetch error:`, err);
     return cached?.data || [];
