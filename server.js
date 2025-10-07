@@ -37,7 +37,6 @@ function computeMultiplier(decimalOdds) {
   return Math.max(1.1, Math.min(3.5, decimalOdds * 0.97));
 }
 
-// --- API fetch + cache ---
 async function fetchMatches(league) {
   const cached = cache[league.id];
   const now = Date.now();
@@ -55,41 +54,51 @@ async function fetchMatches(league) {
     }
 
     const data = await res.json();
-    const matches = data
-      .filter(m => m.commence_time && dateWithinRange(m.commence_time))
-      .map(game => {
-        const home = game.home_team || "Home";
-        const away = game.away_team || "Away";
-        const odds = game.bookmakers?.[0]?.markets?.[0]?.outcomes || [];
 
-        const homeOdds = odds.find(o => o.name === home)?.price ?? 2.0;
-        const awayOdds = odds.find(o => o.name === away)?.price ?? 2.0;
+    const matches = data.map(game => {
+      const now = new Date();
+      const start = new Date(game.commence_time);
 
-        const homeChance = computeWinChance(homeOdds);
-        const awayChance = computeWinChance(awayOdds);
-        const total = homeChance + awayChance;
+      // Determine game status
+      let status = "scheduled";
+      if (game.completed) {
+        status = "completed";
+      } else if (start <= now && (!game.completed)) {
+        status = "live"; // in progress
+      }
 
-        return {
-          MatchID: game.id,
-          League: league.id.toUpperCase(),
-          Scheduled: game.commence_time,
-          Status: game.completed ? "completed" : "scheduled",
-          Venue: game.venue || "TBD",
-          HomeTeam: {
-            name: home,
-            odds: homeOdds,
-            winChance: homeChance / total,
-            multiplier: computeMultiplier(homeOdds),
-          },
-          AwayTeam: {
-            name: away,
-            odds: awayOdds,
-            winChance: awayChance / total,
-            multiplier: computeMultiplier(awayOdds),
-          },
-          Winner: game.completed ? game.scores?.find(s => s.winner)?.name ?? null : null,
-        };
-      });
+      const home = game.home_team || "Home";
+      const away = game.away_team || "Away";
+      const odds = game.bookmakers?.[0]?.markets?.[0]?.outcomes || [];
+
+      const homeOdds = odds.find(o => o.name === home)?.price ?? 2.0;
+      const awayOdds = odds.find(o => o.name === away)?.price ?? 2.0;
+
+      const homeChance = computeWinChance(homeOdds);
+      const awayChance = computeWinChance(awayOdds);
+      const total = homeChance + awayChance;
+
+      return {
+        MatchID: game.id,
+        League: league.id.toUpperCase(),
+        Scheduled: game.commence_time,
+        Status: status,
+        Venue: game.venue || "TBD",
+        HomeTeam: {
+          name: home,
+          odds: homeOdds,
+          winChance: homeChance / total,
+          multiplier: computeMultiplier(homeOdds),
+        },
+        AwayTeam: {
+          name: away,
+          odds: awayOdds,
+          winChance: awayChance / total,
+          multiplier: computeMultiplier(awayOdds),
+        },
+        Winner: game.completed ? game.scores?.find(s => s.winner)?.name ?? null : null,
+      };
+    });
 
     console.log(`✅ ${league.id.toUpperCase()} fetched ${matches.length} games`);
     cache[league.id] = { data: matches, lastFetch: now };
@@ -99,6 +108,7 @@ async function fetchMatches(league) {
     return cached?.data || [];
   }
 }
+
 
 // --- Routes ---
 app.get("/getMatches/:league", async (req, res) => {
