@@ -20,6 +20,17 @@ let cache = {}; // { leagueId: { data, lastFetch } }
 const DAYS_AHEAD = 14; // Upcoming window
 const DAYS_BACK_COMPLETED = 2; // Recently completed window
 
+// --- Helpers ---
+function computeWinChance(decimalOdds) {
+  if (!decimalOdds || decimalOdds <= 1) return 0.5;
+  return 1 / decimalOdds;
+}
+
+function computeMultiplier(decimalOdds) {
+  if (!decimalOdds) return 1.1;
+  return Math.max(1.1, Math.min(3.5, decimalOdds * 0.97));
+}
+
 async function fetchMatches(league) {
   const cached = cache[league.id];
   const now = Date.now();
