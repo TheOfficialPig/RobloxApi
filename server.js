@@ -17,22 +17,8 @@ const LEAGUES = [
 const BASE_URL = "https://api.the-odds-api.com/v4/sports";
 const CACHE_TTL = 20 * 60 * 3000; // 20 minutes
 let cache = {}; // { leagueId: { data, lastFetch } }
-const DAYS_AHEAD = 14;
-const DAYS_BACK_COMPLETED = 2;
-
-function dateWithinFutureRange(dateStr) {
-  const now = new Date();
-  const date = new Date(dateStr);
-  const diff = (date - now) / (1000 * 60 * 60 * 24);
-  return diff >= 0 && diff <= DAYS_AHEAD;
-}
-
-function dateWithinPastRange(dateStr) {
-  const now = new Date();
-  const date = new Date(dateStr);
-  const diff = (now - date) / (1000 * 60 * 60 * 24);
-  return diff >= 0 && diff <= DAYS_BACK_COMPLETED;
-}
+const DAYS_AHEAD = 14; // Upcoming window
+const DAYS_BACK_COMPLETED = 2; // Recently completed window
 
 async function fetchMatches(league) {
   const cached = cache[league.id];
@@ -51,30 +37,19 @@ async function fetchMatches(league) {
     }
 
     const data = await res.json();
-
     const matches = data
       .filter(game => {
         const start = new Date(game.commence_time);
-        const now = new Date();
+        const diffAhead = (start - now) / (1000 * 60 * 60 * 24); // days ahead
+        const diffBack = (now - start) / (1000 * 60 * 60 * 24);  // days back
 
-        // Keep if:
-        // 1. Live game
-        // 2. Scheduled within next 14 days
-        // 3. Completed within last 2 days
-        const isLive = start <= now && !game.completed;
-        const isUpcoming = dateWithinFutureRange(game.commence_time);
-        const isRecentCompleted = game.completed && dateWithinPastRange(game.commence_time);
+        const isLive = !game.completed && start <= now;
+        const isUpcoming = diffAhead >= 0 && diffAhead <= DAYS_AHEAD;
+        const isRecentCompleted = game.completed && diffBack <= DAYS_BACK_COMPLETED;
 
         return isLive || isUpcoming || isRecentCompleted;
       })
       .map(game => {
-        const now = new Date();
-        const start = new Date(game.commence_time);
-
-        let status = "scheduled";
-        if (game.completed) status = "completed";
-        else if (start <= now) status = "live";
-
         const home = game.home_team || "Home";
         const away = game.away_team || "Away";
         const odds = game.bookmakers?.[0]?.markets?.[0]?.outcomes || [];
@@ -85,6 +60,14 @@ async function fetchMatches(league) {
         const homeChance = computeWinChance(homeOdds);
         const awayChance = computeWinChance(awayOdds);
         const total = homeChance + awayChance;
+
+        // Determine status
+        const start = new Date(game.commence_time);
+        const status = game.completed
+          ? "completed"
+          : start <= new Date()
+            ? "live"
+            : "scheduled";
 
         return {
           MatchID: game.id,
@@ -116,6 +99,7 @@ async function fetchMatches(league) {
     return cached?.data || [];
   }
 }
+
 
 // --- Routes ---
 app.get("/getMatches/:league", async (req, res) => {
