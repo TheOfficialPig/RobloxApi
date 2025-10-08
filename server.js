@@ -5,7 +5,7 @@ dotenv.config();
 
 const app = express();
 const PORT = process.env.PORT || 3000;
-const API_KEY = process.env.ODDS_API_KEY || "f547eaaf9d81defdd53c829deee7fd41";
+const API_KEY = process.env.ODDS_API_KEY || "7f26207f24a5cb55f0be8124bfcf7ad6";
 
 const LEAGUES = [
   { id: "nfl", api: "americanfootball_nfl" },
