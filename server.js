@@ -70,9 +70,8 @@ async function fetchMatches(league) {
         const total = homeChance + awayChance;
 
         const start = new Date(game.commence_time);
-        const status =
-          game.completed ? "completed" :
-          start <= new Date() ? "live" : "scheduled";
+        const nowDate = new Date();
+        const status = start > nowDate ? "scheduled" : "live";
 
         return {
           MatchID: game.id,
@@ -120,11 +119,13 @@ async function fetchMatches(league) {
         Winner: winner,
       };
 
-      if (existing) {
-        existing.Status = "completed";
-        existing.Winner = winner;
-      } else if (score.completed) {
-        matches.push(gameObj);
+      if (score.completed) {
+        if (existing) {
+          existing.Status = "completed";
+          existing.Winner = winner;
+        } else {
+          matches.push(gameObj);
+        }
       }
     }
 
