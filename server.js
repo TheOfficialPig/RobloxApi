@@ -102,11 +102,19 @@ async function fetchMatches(league) {
       const away = score.away_team || "Away";
 
       let winner = null;
-      if (score.completed && score.scores?.length >= 2) {
-        const [s1, s2] = score.scores;
-        if (s1.score > s2.score) winner = s1.name;
-        else if (s2.score > s1.score) winner = s2.name;
-      }
+      if (score.completed) {
+  // Try normal fields first
+  if (score.home_score !== undefined && score.away_score !== undefined) {
+    if (score.home_score > score.away_score) winner = score.home_team;
+    else if (score.away_score > score.home_score) winner = score.away_team;
+  }
+  // Fallback for older score structure
+  else if (Array.isArray(score.scores) && score.scores.length >= 2) {
+    const [s1, s2] = score.scores;
+    if (s1.score > s2.score) winner = s1.name;
+    else if (s2.score > s1.score) winner = s2.name;
+  }
+}
 
       const gameObj = {
         MatchID: score.id,
